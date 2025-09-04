@@ -1,47 +1,61 @@
-<?php
-function sendRequest($url) {
-    $ch = curl_init();
-    curl_setopt($ch, CURLOPT_URL, $url);
-    curl_setopt($ch, CURLOPT_RETURNTRANSFER, true);
-    return json_decode(curl_exec($ch), true);
-}
+import os
+import requests
+from flask import Flask, jsonify
 
-$token = '687409:4164553abf6a031302898da7800b59fb';
-$dateFrom = '2024-07-01';
-$dateTo = '2024-09-01';
-$perPage = 100;
-$page = 1;
+app = Flask(__name__)
 
-$totalCheYan = 0;
-$totalPide = 0;
+POSTER_TOKEN = os.getenv("POSTER_TOKEN")
 
-do {
-    $url = "https://joinposter.com/api/transactions.getTransactions"
-        . "?token=$token"
-        . "&date_from=$dateFrom"
-        . "&date_to=$dateTo"
-        . "&per_page=$perPage"
-        . "&page=$page";
+# ID продуктов (замени на свои при необходимости)
+CHEBUREKI_YANTYKI_IDS = [
+    "14", "8", "243", "327", "347", "12", "13",  # Чебуреки
+    "244", "502", "349", "74", "73", "75", "76", "375"  # Янтики
+]
 
-    $data = sendRequest($url);
-    if (!isset($data['response']['data'])) break;
+PIDE_IDS = ["101", "102"]  # Примерные ID — укажи точные ID продуктов пиде
 
-    foreach ($data['response']['data'] as $transaction) {
-        if (!isset($transaction['products'])) continue;
-        foreach ($transaction['products'] as $product) {
-            $name = $product['product_name'] ?? '';
-            $qty = (int)$product['num'];
 
-            if (stripos($name, 'чебурек') !== false || stripos($name, 'янтик') !== false) {
-                $totalCheYan += $qty;
-            } elseif (stripos($name, 'пиде') !== false || stripos($name, 'піде') !== false) {
-                $totalPide += $qty;
-            }
-        }
+def get_transactions():
+    url = f"https://joinposter.com/api/transactions.getTransactions"
+    params = {
+        "token": POSTER_TOKEN,
+        "date_from": "2024-07-01",
+        "date_to": "2024-09-01",
+        "per_page": 1000
     }
+    response = requests.get(url, params=params)
+    return response.json()["response"]["data"]
 
-    $page++;
-} while (count($data['response']['data']) === $perPage);
 
-echo "Чебуреки и Янтики: $totalCheYan шт\n";
-echo "Піде: $totalPide шт\n";
+def count_products(transactions):
+    che_count = 0
+    pide_count = 0
+
+    for t in transactions:
+        for product in t.get("products", []):
+            product_id = str(product.get("product_id"))
+            amount = int(product.get("num", 0))
+
+            if product_id in CHEBUREKI_YANTYKI_IDS:
+                che_count += amount
+            elif product_id in PIDE_IDS:
+                pide_count += amount
+
+    return che_count, pide_count
+
+
+@app.route("/")
+def dashboard():
+    try:
+        transactions = get_transactions()
+        chebureki_yantyki, pide = count_products(transactions)
+        return jsonify({
+            "Чебуреки и Янтики": f"{chebureki_yantyki} шт",
+            "Пиде": f"{pide} шт"
+        })
+    except Exception as e:
+        return jsonify({"error": str(e)}), 500
+
+
+if __name__ == "__main__":
+    app.run(debug=True)
