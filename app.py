@@ -1,71 +1,65 @@
 from flask import Flask
 import requests
-from datetime import date
+import datetime
 import os
 
 app = Flask(__name__)
 
-POSTER_TOKEN = "687409:4164553abf6a031302898da7800b59fb"
+POSTER_TOKEN = '687409:4164553abf6a031302898da7800b59fb'
 
-# Список кодов продуктов
-CHEBUREKI_IDS = {
-    "14--NW", "8--NW", "243--NW", "327--NW-NOMOD", "347--NW",
-    "12--NW", "13--NW", "244--NW", "502--NW-NOMOD", "349--NW",
-    "74--NW", "73--NW", "75--NW", "76--NW", "375--NW"
-}
+# Получаем сегодняшнюю дату
+def get_today_date():
+    return datetime.datetime.now().strftime("%Y-%m-%d")
 
-PIDE_IDS = {
-    "210--NW", "545--NW-NOMOD", "209--NW", "360--NW", "208--NW"
-}
+# Получаем все транзакции за сегодня
+def get_transactions_for_today():
+    url = 'https://joinposter.com/api/transactions.getTransactions'
+    params = {
+        'token': POSTER_TOKEN,
+        'date_from': get_today_date(),
+        'date_to': get_today_date(),
+        'include_products': 'true',
+        'per_page': 100,
+        'page': 1
+    }
 
-def get_sales_data():
-    today = date.today().strftime('%Y-%m-%d')
-    page = 1
-    chebureki_total = 0
-    pide_total = 0
-
+    all_data = []
     while True:
-        url = f"https://joinposter.com/api/transactions.getTransactions?token={POSTER_TOKEN}&date_from={today}&date_to={today}&per_page=100&page={page}"
-        response = requests.get(url)
-        data = response.json()
+        res = requests.get(url, params=params)
+        data = res.json()
 
-        transactions = data.get("response", {}).get("data", [])
+        if 'response' not in data or 'data' not in data['response']:
+            break
+
+        transactions = data['response']['data']
         if not transactions:
             break
 
-        for t in transactions:
-            for p in t.get("products", []):
-                product_id = p.get("product_id")
-                product_code = str(p.get("product_code", ""))
-
-                if product_code in CHEBUREKI_IDS:
-                    chebureki_total += float(p.get("num", 0))
-                elif product_code in PIDE_IDS:
-                    pide_total += float(p.get("num", 0))
-
-        if len(transactions) < 100:
+        all_data.extend(transactions)
+        if len(transactions) < params['per_page']:
             break
-        page += 1
+        params['page'] += 1
 
-    return int(chebureki_total), int(pide_total)
+    return all_data
 
+# Страница по умолчанию
 @app.route("/")
-def index():
-    return '<h2>✅ Kitchen Dashboard is running!</h2><br><a href="/start">Перейти к отчету</a>'
+def home():
+    return "✅ Kitchen Dashboard is running!"
 
-@app.route("/start")
-def report():
-    chebureki, pide = get_sales_data()
+# DEBUG — список продуктов из транзакций
+@app.route("/debug")
+def debug():
+    transactions = get_transactions_for_today()
+    lines = []
 
-    html = f"""
-    <h1>Отчет по продажам за сегодня</h1>
-    <ul>
-        <li><b>Чебуреки и Янтики:</b> {chebureki} шт</li>
-        <li><b>Піде:</b> {pide} шт</li>
-    </ul>
-    """
-    return html
+    for tx in transactions:
+        for product in tx.get("products", []):
+            lines.append(f"{product}<br>")
 
+    return f"<h3>DEBUG: продукты за {get_today_date()}</h3>" + "".join(lines)
+
+# Для запуска сервера
 if __name__ == "__main__":
     port = int(os.environ.get("PORT", 10000))
     app.run(host="0.0.0.0", port=port)
