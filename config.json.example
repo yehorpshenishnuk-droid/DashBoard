@@ -1,3 +1,4 @@
 {
-  "poster_token": "YOUR_POSTER_TOKEN"
+  "POSTER_TOKEN": "your_poster_api_token_here",
+  "CHOICE_TOKEN": "your_choice_api_token_here"
 }
