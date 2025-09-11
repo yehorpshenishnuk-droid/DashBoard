@@ -48,16 +48,24 @@ hot_data = {}
 
 def fetch_sales():
     """Получаем продажи из Poster API"""
-    url = f"https://joinposter.com/api/report.getSales?token={POSTER_TOKEN}"
+    url = f"https://joinposter.com/api/report.getProductsSales?token={POSTER_TOKEN}"
     resp = requests.get(url)
+
+    # DEBUG вывод для Render logs
+    print("DEBUG Poster API response:", resp.text[:500])
+
     data = resp.json().get("response", [])
 
     sales_count = {}
     total_checks = 0
 
     for item in data:
-        product_id = int(item.get("product_id", 0))
-        quantity = int(float(item.get("num_sales", 0)))
+        try:
+            product_id = int(item.get("product_id", 0))
+            quantity = int(float(item.get("num_sales", 0)))
+        except Exception:
+            continue
+
         if product_id in HOT_DISHES:
             sales_count[product_id] = sales_count.get(product_id, 0) + quantity
             total_checks += quantity
@@ -80,6 +88,7 @@ def index():
             last_update = time.time()
         except Exception as e:
             hot_data = {"total": 0, "top3": [("Ошибка", 0)]}
+            print("ERROR fetch_sales:", e)
 
     template = """
     <html>
