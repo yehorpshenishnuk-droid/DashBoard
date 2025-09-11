@@ -43,18 +43,16 @@ HOT_DISHES = {
     208: "Піде з сиром та часниковим соусом",
 }
 
-# Кэш данных (обновляется каждые 30 секунд)
 last_update = 0
 hot_data = {}
 
 
 def fetch_sales():
     """Получаем продажи из Poster API"""
-    url = f"https://{ACCOUNT_NAME}.joinposter.com/api/report.getProductsSales?token={POSTER_TOKEN}"
+    url = f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getProductsSales?token={POSTER_TOKEN}"
     resp = requests.get(url)
 
-    # DEBUG вывод для Render logs
-    print("DEBUG Poster API response:", resp.text[:1000], file=sys.stderr, flush=True)
+    print("DEBUG Poster API response:", resp.text[:500], file=sys.stderr, flush=True)
 
     try:
         data = resp.json().get("response", [])
@@ -68,7 +66,7 @@ def fetch_sales():
     for item in data:
         try:
             product_id = int(item.get("product_id", 0))
-            quantity = int(float(item.get("num_sales", 0)))
+            quantity = int(float(item.get("count", 0)))
         except Exception:
             continue
 
@@ -76,7 +74,6 @@ def fetch_sales():
             sales_count[product_id] = sales_count.get(product_id, 0) + quantity
             total_checks += quantity
 
-    # Сортировка по количеству
     top3 = sorted(sales_count.items(), key=lambda x: x[1], reverse=True)[:3]
 
     return {
@@ -88,7 +85,7 @@ def fetch_sales():
 @app.route("/")
 def index():
     global last_update, hot_data
-    if time.time() - last_update > 30:  # обновляем каждые 30 секунд
+    if time.time() - last_update > 30:
         try:
             hot_data = fetch_sales()
             last_update = time.time()
