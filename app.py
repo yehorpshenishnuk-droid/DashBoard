@@ -10,13 +10,15 @@ app = Flask(__name__)
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")
 ACCOUNT_NAME = "poka-net3"  # твой поддомен Poster
 
-# Список горячего цеха (id: название)
+# ======================
+# Гарячий цех
+# ======================
 HOT_DISHES = {
     14: "Чебурек з моцарелою та сулугуні",
     8: "Чебурек з телятиною",
     243: "Чебурек з томатами та грибами",
     327: "Чебурек з вишнею та вершковим крем сиром",
-    347: "Чебурек з бараниною",
+    347: "Чебурек з баранниною",
     12: "Чебурек з свининою",
     13: "Чебурек з куркою",
     515: "Телячі щічки з картопляним пюре, 330 г",
@@ -44,12 +46,69 @@ HOT_DISHES = {
     208: "Піде з сиром та часниковим соусом",
 }
 
+# ======================
+# Холодний цех
+# ======================
+COLD_DISHES = {
+    493: "Пельмені з філе молодої курки, 500 г",
+    495: "Пельмені як мають бути з телятиною, 500 г",
+    510: "Пельмені свино-яловичі , 500г",
+    399: "Салат з запеченими овочами",
+    487: "Салат з хамоном та карамелізованою грушею",
+    219: "Теплий салат з телятиною",
+    55: "Салат цезарь",
+    40: "Грецький салат",
+    234: "Пісний овочевий з горіховою заправкою",
+    53: "Овочевий салат з горіховою заправкою",
+    273: "Легкий салат з запеченим гарбузом",
+    438: "Мікс салату з куркою сувід",
+    288: "Крем-суп гарбузовий з беконом",
+    262: "Крем-суп грибний з грінками",
+    37: "Суп Вушка",
+    42: "М'ясна солянка",
+    206: "Окрошка на айрані з ковбасою",
+    384: "Окрошка на айрані з язиком телячим, 300 г",
+    44: "Манти з яловичиною (класичні)",
+    521: "Пельмені з філе курки",
+    429: "Манти з сиром та зеленью",
+    9: "Манти з яловичиною та свининою",
+    497: "Пельмені як мають бути з телятиною",
+    51: "Деруни з вершковим соусом та грибами",
+    49: "Деруни зі сметаною",
+    252: "Картопля по-селянськи з грибами",
+    503: "Картопля селянка",
+    229: "Жульєн",
+    387: "Бадриджани з крем сиром та волоським горіхом",
+    363: "Стріпси з філе молодої курки",
+    397: "Оливковий мікс",
+    68: "Картопля Фрі з соусами",
+    67: "Сирна тарілка",
+    69: "Сирні хрусткі палички",
+    403: "Батат фрі з соусом цезар та пармезаном",
+    63: "Млинці солодкі з ванільним сиром",
+    61: "Млинці с куркою та грибами",
+    66: "Млинці с куркою",
+    47: "Сирники",
+    57: "Сирні солодкі кульки",
+    64: "Млинці ажурні без начинки",
+    353: "Класика",
+    540: "Вафельний десерт з натяком на рафаело, 115 г",
+    214: "Шоколадний фондан",
+    331: "Чизкейк LA",
+    401: "Ніжне крем-брюле",
+    276: "Сніданок 'Субмарина'",
+    440: "Сніданок 'Шакшука'",
+    444: "Сніданок 'Як вдома'",
+    275: "Сніданок 'Бюргер'",
+    274: "Сніданок 'Фрітата'",
+}
+
 last_update = 0
-hot_data = {}
+cache = {"hot": {}, "cold": {}}
 
 
-def fetch_sales():
-    """Получаем продажи из Poster API за текущий день"""
+def fetch_sales(dishes_dict):
+    """Получаем продажи из Poster API за текущий день для заданного цеха"""
     today = date.today().strftime("%Y-%m-%d")
     url = (
         f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getProductsSales"
@@ -57,13 +116,13 @@ def fetch_sales():
     )
 
     resp = requests.get(url)
-    print("DEBUG Poster API response:", resp.text[:300], file=sys.stderr, flush=True)
+    print("DEBUG Poster API response:", resp.text[:200], file=sys.stderr, flush=True)
 
     try:
         data = resp.json().get("response", [])
     except Exception as e:
         print("ERROR parsing JSON:", e, file=sys.stderr, flush=True)
-        return {"total": 0, "top3": [("Ошибка", 0)]}
+        return {"total": 0, "top3": [("Помилка", 0)]}
 
     sales_count = {}
     total_orders = 0
@@ -75,7 +134,7 @@ def fetch_sales():
         except Exception:
             continue
 
-        if product_id in HOT_DISHES:
+        if product_id in dishes_dict:
             sales_count[product_id] = sales_count.get(product_id, 0) + quantity
             total_orders += quantity
 
@@ -83,57 +142,80 @@ def fetch_sales():
 
     return {
         "total": total_orders,
-        "top3": [(HOT_DISHES[i], c) for i, c in top3]
+        "top3": [(dishes_dict[i], c) for i, c in top3]
     }
 
 
 @app.route("/api/hot")
 def api_hot():
-    """API для фронтенда (JSON)"""
-    global last_update, hot_data
+    global last_update, cache
     if time.time() - last_update > 30:
-        try:
-            hot_data = fetch_sales()
-            last_update = time.time()
-        except Exception as e:
-            hot_data = {"total": 0, "top3": [("Ошибка", 0)]}
-            print("ERROR fetch_sales:", e, file=sys.stderr, flush=True)
-    return jsonify(hot_data)
+        cache["hot"] = fetch_sales(HOT_DISHES)
+    return jsonify(cache["hot"])
+
+
+@app.route("/api/cold")
+def api_cold():
+    global last_update, cache
+    if time.time() - last_update > 30:
+        cache["cold"] = fetch_sales(COLD_DISHES)
+        last_update = time.time()
+    return jsonify(cache["cold"])
 
 
 @app.route("/")
 def index():
-    """Главная страница"""
     template = """
     <html>
     <head>
         <style>
             body { font-family: Arial, sans-serif; background: #111; color: #eee; text-align: center; }
             h2 { color: orange; }
-            .block { margin: 30px auto; width: 420px; padding: 20px; border: 2px solid orange; border-radius: 10px; }
+            .grid { display: flex; justify-content: center; gap: 40px; }
+            .block { width: 420px; padding: 20px; border: 2px solid orange; border-radius: 10px; }
             .item { font-size: 20px; margin: 5px 0; }
+            .total { margin-top: 30px; font-size: 24px; color: yellow; }
         </style>
     </head>
     <body>
-        <div class="block">
-            <h2>🔥 Гарячий ЦЕХ</h2>
-            <p id="total">Всього: ... замовлень</p>
-            <div id="top3">Загрузка...</div>
+        <div class="grid">
+            <div class="block">
+                <h2>🔥 Гарячий ЦЕХ</h2>
+                <p id="hot_total">Всього: ... замовлень</p>
+                <div id="hot_top3">Загрузка...</div>
+            </div>
+            <div class="block">
+                <h2>❄️ Холодний ЦЕХ</h2>
+                <p id="cold_total">Всього: ... замовлень</p>
+                <div id="cold_top3">Загрузка...</div>
+            </div>
         </div>
+        <div class="total" id="all_total">Загальна кількість замовлень: ...</div>
 
         <script>
         async function updateData() {
             try {
-                const res = await fetch('/api/hot');
-                const data = await res.json();
-
-                document.getElementById('total').innerText = "Всього: " + data.total + " замовлень";
-
-                let topDiv = document.getElementById('top3');
-                topDiv.innerHTML = "🏆 ТОП-3 продажі:";
-                data.top3.forEach((item, index) => {
-                    topDiv.innerHTML += `<div class="item">${index+1}) ${item[0]} — ${item[1]}</div>`;
+                const hotRes = await fetch('/api/hot');
+                const hot = await hotRes.json();
+                document.getElementById('hot_total').innerText = "Всього: " + hot.total + " замовлень";
+                let hotDiv = document.getElementById('hot_top3');
+                hotDiv.innerHTML = "🏆 ТОП-3 продажі:";
+                hot.top3.forEach((item, index) => {
+                    hotDiv.innerHTML += `<div class="item">${index+1}) ${item[0]} — ${item[1]}</div>`;
                 });
+
+                const coldRes = await fetch('/api/cold');
+                const cold = await coldRes.json();
+                document.getElementById('cold_total').innerText = "Всього: " + cold.total + " замовлень";
+                let coldDiv = document.getElementById('cold_top3');
+                coldDiv.innerHTML = "🏆 ТОП-3 продажі:";
+                cold.top3.forEach((item, index) => {
+                    coldDiv.innerHTML += `<div class="item">${index+1}) ${item[0]} — ${item[1]}</div>`;
+                });
+
+                // Общая сумма
+                document.getElementById('all_total').innerText =
+                    "Загальна кількість замовлень: " + (hot.total + cold.total);
             } catch (e) {
                 console.error("Ошибка обновления:", e);
             }
