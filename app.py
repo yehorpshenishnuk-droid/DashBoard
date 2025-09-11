@@ -11,7 +11,7 @@ POSTER_TOKEN = os.getenv("POSTER_TOKEN")
 ACCOUNT_NAME = "poka-net3"
 
 # ======================
-# Гарячий цех
+# Словари цехов
 # ======================
 HOT_DISHES = {
     14: "Чебурек з моцарелою та сулугуні",
@@ -46,9 +46,6 @@ HOT_DISHES = {
     208: "Піде з сиром та часниковим соусом",
 }
 
-# ======================
-# Холодний цех
-# ======================
 COLD_DISHES = {
     493: "Пельмені з філе молодої курки, 500 г",
     495: "Пельмені як мають бути з телятиною, 500 г",
@@ -103,30 +100,25 @@ COLD_DISHES = {
     274: "Сніданок 'Фрітата'",
 }
 
-last_update = 0
-cache = {"hot": {}, "cold": {}}
+# ======================
+# Кэш
+# ======================
+last_update = {"hot": 0, "cold": 0, "timeline": 0}
+cache = {"hot": {}, "cold": {}, "timeline": {}}
 
 
 def fetch_sales(dishes_dict):
-    """Получаем продажи из Poster API за текущий день для заданного цеха"""
+    """Получаем продажи для заданного цеха"""
     today = date.today().strftime("%Y-%m-%d")
-    url = (
-        f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getProductsSales"
-        f"?token={POSTER_TOKEN}&date_from={today}&date_to={today}"
-    )
-
+    url = f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getProductsSales?token={POSTER_TOKEN}&date_from={today}&date_to={today}"
     resp = requests.get(url)
-    print("DEBUG Poster API response:", resp.text[:200], file=sys.stderr, flush=True)
-
     try:
         data = resp.json().get("response", [])
     except Exception as e:
         print("ERROR parsing JSON:", e, file=sys.stderr, flush=True)
-        return {"total": 0, "top3": [("Помилка", 0)]}
+        return {"total": 0, "top3": []}
 
-    sales_count = {}
-    total_orders = 0
-
+    sales_count, total_orders = {}, 0
     for item in data:
         try:
             product_id = int(item.get("product_id", 0))
@@ -139,28 +131,55 @@ def fetch_sales(dishes_dict):
             total_orders += quantity
 
     top3 = sorted(sales_count.items(), key=lambda x: x[1], reverse=True)[:3]
+    return {"total": total_orders, "top3": [(dishes_dict[i], c) for i, c in top3]}
 
-    return {
-        "total": total_orders,
-        "top3": [(dishes_dict[i], c) for i, c in top3]
-    }
+
+def fetch_timeline():
+    """График заказов по часам"""
+    today = date.today().strftime("%Y-%m-%d")
+    url = f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getProductsSales?token={POSTER_TOKEN}&date_from={today}&date_to={today}"
+    resp = requests.get(url)
+    try:
+        data = resp.json().get("response", [])
+    except Exception as e:
+        print("ERROR parsing JSON:", e, file=sys.stderr, flush=True)
+        return {}
+
+    timeline = {}
+    for item in data:
+        count = int(float(item.get("count", 0)))
+        # Берем время модификации из поля left/right или просто текущий час (если нет)
+        hour = datetime.now().hour
+        timeline[hour] = timeline.get(hour, 0) + count
+
+    # Преобразуем в массив
+    labels = [f"{h:02d}:00" for h in range(24)]
+    values = [timeline.get(h, 0) for h in range(24)]
+    return {"labels": labels, "values": values}
 
 
 @app.route("/api/hot")
 def api_hot():
-    global last_update, cache
-    if time.time() - last_update > 30:
+    if time.time() - last_update["hot"] > 30:
         cache["hot"] = fetch_sales(HOT_DISHES)
+        last_update["hot"] = time.time()
     return jsonify(cache["hot"])
 
 
 @app.route("/api/cold")
 def api_cold():
-    global last_update, cache
-    if time.time() - last_update > 30:
+    if time.time() - last_update["cold"] > 30:
         cache["cold"] = fetch_sales(COLD_DISHES)
-        last_update = time.time()
+        last_update["cold"] = time.time()
     return jsonify(cache["cold"])
+
+
+@app.route("/api/timeline")
+def api_timeline():
+    if time.time() - last_update["timeline"] > 30:
+        cache["timeline"] = fetch_timeline()
+        last_update["timeline"] = time.time()
+    return jsonify(cache["timeline"])
 
 
 @app.route("/")
@@ -168,34 +187,37 @@ def index():
     template = """
     <html>
     <head>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <style>
             body { font-family: Arial, sans-serif; background: #111; color: #eee; text-align: center; }
             h2 { font-size: 40px; margin-bottom: 20px; }
             .grid { display: flex; justify-content: center; gap: 50px; max-width: 1400px; margin: auto; }
-            .block { width: 650px; padding: 30px; border-radius: 15px; box-shadow: 0 0 20px rgba(0,0,0,0.7); animation: fadeIn 1s; }
+            .block { width: 650px; padding: 30px; border-radius: 15px; box-shadow: 0 0 20px rgba(0,0,0,0.7); }
             .hot { border: 4px solid #ff6600; }
             .cold { border: 4px solid #0099ff; }
             .item { font-size: 28px; margin: 8px 0; }
             .total { margin-top: 40px; font-size: 34px; font-weight: bold; }
             .updated { margin-top: 10px; font-size: 18px; color: #aaa; }
-            @keyframes fadeIn { from {opacity: 0;} to {opacity: 1;} }
+            canvas { margin-top: 40px; background: #222; border-radius: 10px; padding: 20px; }
         </style>
     </head>
     <body>
         <div class="grid">
             <div class="block hot">
                 <h2>🔥 Гарячий ЦЕХ</h2>
-                <p id="hot_total" style="font-size:32px; font-weight:bold;">Всього: ...</p>
+                <p id="hot_total">Всього: ...</p>
                 <div id="hot_top3">Загрузка...</div>
             </div>
             <div class="block cold">
                 <h2>❄️ Холодний ЦЕХ</h2>
-                <p id="cold_total" style="font-size:32px; font-weight:bold;">Всього: ...</p>
+                <p id="cold_total">Всього: ...</p>
                 <div id="cold_top3">Загрузка...</div>
             </div>
         </div>
         <div class="total" id="all_total">Загальна кількість замовлень: ...</div>
         <div class="updated" id="updated_time">Оновлено: ...</div>
+
+        <canvas id="ordersChart" width="1200" height="400"></canvas>
 
         <script>
         function medal(index) {
@@ -205,38 +227,57 @@ def index():
             return "";
         }
 
+        let chart;
+
         async function updateData() {
-            try {
-                const hotRes = await fetch('/api/hot');
-                const hot = await hotRes.json();
-                document.getElementById('hot_total').innerText = "Всього: " + hot.total + " замовлень";
-                let hotDiv = document.getElementById('hot_top3');
-                hotDiv.innerHTML = "🏆 ТОП-3 продажі:";
-                hot.top3.forEach((item, index) => {
-                    hotDiv.innerHTML += `<div class="item">${medal(index)} ${item[0]} — ${item[1]}</div>`;
-                });
+            const hot = await (await fetch('/api/hot')).json();
+            const cold = await (await fetch('/api/cold')).json();
+            const timeline = await (await fetch('/api/timeline')).json();
 
-                const coldRes = await fetch('/api/cold');
-                const cold = await coldRes.json();
-                document.getElementById('cold_total').innerText = "Всього: " + cold.total + " замовлень";
-                let coldDiv = document.getElementById('cold_top3');
-                coldDiv.innerHTML = "🏆 ТОП-3 продажі:";
-                cold.top3.forEach((item, index) => {
-                    coldDiv.innerHTML += `<div class="item">${medal(index)} ${item[0]} — ${item[1]}</div>`;
-                });
+            document.getElementById('hot_total').innerText = "Всього: " + hot.total + " замовлень";
+            let hotDiv = document.getElementById('hot_top3');
+            hotDiv.innerHTML = "🏆 ТОП-3 продажі:";
+            hot.top3.forEach((item, index) => {
+                hotDiv.innerHTML += `<div class="item">${medal(index)} ${item[0]} — ${item[1]}</div>`;
+            });
 
-                // Общая сумма
-                const all = hot.total + cold.total;
-                const totalDiv = document.getElementById('all_total');
-                totalDiv.innerText = "Загальна кількість замовлень: " + all;
-                totalDiv.style.color = all > 100 ? "lime" : (all > 50 ? "yellow" : "red");
+            document.getElementById('cold_total').innerText = "Всього: " + cold.total + " замовлень";
+            let coldDiv = document.getElementById('cold_top3');
+            coldDiv.innerHTML = "🏆 ТОП-3 продажі:";
+            cold.top3.forEach((item, index) => {
+                coldDiv.innerHTML += `<div class="item">${medal(index)} ${item[0]} — ${item[1]}</div>`;
+            });
 
-                // Время обновления
-                const now = new Date();
-                document.getElementById('updated_time').innerText = "Оновлено: " + now.toLocaleTimeString();
-            } catch (e) {
-                console.error("Ошибка обновления:", e);
-            }
+            const all = hot.total + cold.total;
+            const totalDiv = document.getElementById('all_total');
+            totalDiv.innerText = "Загальна кількість замовлень: " + all;
+            totalDiv.style.color = all > 100 ? "lime" : (all > 50 ? "yellow" : "red");
+
+            const now = new Date();
+            document.getElementById('updated_time').innerText = "Оновлено: " + now.toLocaleTimeString();
+
+            // Обновляем график
+            const ctx = document.getElementById('ordersChart').getContext('2d');
+            if (chart) chart.destroy();
+            chart = new Chart(ctx, {
+                type: 'bar',
+                data: {
+                    labels: timeline.labels,
+                    datasets: [{
+                        label: 'Замовлення за годину',
+                        data: timeline.values,
+                        backgroundColor: '#00cc66'
+                    }]
+                },
+                options: {
+                    responsive: false,
+                    plugins: { legend: { labels: { color: 'white' } } },
+                    scales: {
+                        x: { ticks: { color: 'white' } },
+                        y: { ticks: { color: 'white' } }
+                    }
+                }
+            });
         }
 
         setInterval(updateData, 30000);
