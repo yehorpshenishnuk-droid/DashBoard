@@ -135,9 +135,9 @@ def fetch_sales(dishes_dict):
 
 
 def fetch_timeline():
-    """График заказов по часам"""
+    """Все заказы по часам за сегодня (с 9:00 до 23:00)"""
     today = date.today().strftime("%Y-%m-%d")
-    url = f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getProductsSales?token={POSTER_TOKEN}&date_from={today}&date_to={today}"
+    url = f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getTransactions?token={POSTER_TOKEN}&date_from={today}&date_to={today}"
     resp = requests.get(url)
     try:
         data = resp.json().get("response", [])
@@ -147,14 +147,16 @@ def fetch_timeline():
 
     timeline = {}
     for item in data:
-        count = int(float(item.get("count", 0)))
-        # Берем время модификации из поля left/right или просто текущий час (если нет)
-        hour = datetime.now().hour
-        timeline[hour] = timeline.get(hour, 0) + count
+        try:
+            ts = int(item.get("date_start", 0))
+            hour = datetime.fromtimestamp(ts).hour
+            if 9 <= hour <= 23:  # только рабочие часы
+                timeline[hour] = timeline.get(hour, 0) + 1
+        except Exception:
+            continue
 
-    # Преобразуем в массив
-    labels = [f"{h:02d}:00" for h in range(24)]
-    values = [timeline.get(h, 0) for h in range(24)]
+    labels = [f"{h:02d}:00" for h in range(9, 24)]
+    values = [timeline.get(h, 0) for h in range(9, 24)]
     return {"labels": labels, "values": values}
 
 
@@ -256,7 +258,7 @@ def index():
             const now = new Date();
             document.getElementById('updated_time').innerText = "Оновлено: " + now.toLocaleTimeString();
 
-            // Обновляем график
+            // График заказов по часу
             const ctx = document.getElementById('ordersChart').getContext('2d');
             if (chart) chart.destroy();
             chart = new Chart(ctx, {
@@ -264,7 +266,7 @@ def index():
                 data: {
                     labels: timeline.labels,
                     datasets: [{
-                        label: 'Замовлення за годину',
+                        label: 'Замовлення за день',
                         data: timeline.values,
                         backgroundColor: '#00cc66'
                     }]
