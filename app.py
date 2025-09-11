@@ -7,6 +7,7 @@ from flask import Flask, render_template_string
 app = Flask(__name__)
 
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")
+ACCOUNT_NAME = "poka-net3"  # твой поддомен Poster
 
 # Список горячего цеха (id: название)
 HOT_DISHES = {
@@ -49,10 +50,10 @@ hot_data = {}
 
 def fetch_sales():
     """Получаем продажи из Poster API"""
-    url = f"https://joinposter.com/api/report.getProductsSales?token={POSTER_TOKEN}"
+    url = f"https://{ACCOUNT_NAME}.joinposter.com/api/report.getProductsSales?token={POSTER_TOKEN}"
     resp = requests.get(url)
 
-    # DEBUG вывод для Render logs (в stderr, чтобы точно попал)
+    # DEBUG вывод для Render logs
     print("DEBUG Poster API response:", resp.text[:1000], file=sys.stderr, flush=True)
 
     try:
