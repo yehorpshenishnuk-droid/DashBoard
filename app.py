@@ -2,13 +2,13 @@ import os
 import time
 import requests
 import sys
-from datetime import date
+from datetime import date, datetime
 from flask import Flask, render_template_string, jsonify
 
 app = Flask(__name__)
 
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")
-ACCOUNT_NAME = "poka-net3"  # твой поддомен Poster
+ACCOUNT_NAME = "poka-net3"
 
 # ======================
 # Гарячий цех
@@ -170,29 +170,41 @@ def index():
     <head>
         <style>
             body { font-family: Arial, sans-serif; background: #111; color: #eee; text-align: center; }
-            h2 { color: orange; }
-            .grid { display: flex; justify-content: center; gap: 40px; }
-            .block { width: 420px; padding: 20px; border: 2px solid orange; border-radius: 10px; }
-            .item { font-size: 20px; margin: 5px 0; }
-            .total { margin-top: 30px; font-size: 24px; color: yellow; }
+            h2 { font-size: 40px; margin-bottom: 20px; }
+            .grid { display: flex; justify-content: center; gap: 50px; max-width: 1400px; margin: auto; }
+            .block { width: 650px; padding: 30px; border-radius: 15px; box-shadow: 0 0 20px rgba(0,0,0,0.7); animation: fadeIn 1s; }
+            .hot { border: 4px solid #ff6600; }
+            .cold { border: 4px solid #0099ff; }
+            .item { font-size: 28px; margin: 8px 0; }
+            .total { margin-top: 40px; font-size: 34px; font-weight: bold; }
+            .updated { margin-top: 10px; font-size: 18px; color: #aaa; }
+            @keyframes fadeIn { from {opacity: 0;} to {opacity: 1;} }
         </style>
     </head>
     <body>
         <div class="grid">
-            <div class="block">
+            <div class="block hot">
                 <h2>🔥 Гарячий ЦЕХ</h2>
-                <p id="hot_total">Всього: ... замовлень</p>
+                <p id="hot_total" style="font-size:32px; font-weight:bold;">Всього: ...</p>
                 <div id="hot_top3">Загрузка...</div>
             </div>
-            <div class="block">
+            <div class="block cold">
                 <h2>❄️ Холодний ЦЕХ</h2>
-                <p id="cold_total">Всього: ... замовлень</p>
+                <p id="cold_total" style="font-size:32px; font-weight:bold;">Всього: ...</p>
                 <div id="cold_top3">Загрузка...</div>
             </div>
         </div>
         <div class="total" id="all_total">Загальна кількість замовлень: ...</div>
+        <div class="updated" id="updated_time">Оновлено: ...</div>
 
         <script>
+        function medal(index) {
+            if (index === 0) return "🥇";
+            if (index === 1) return "🥈";
+            if (index === 2) return "🥉";
+            return "";
+        }
+
         async function updateData() {
             try {
                 const hotRes = await fetch('/api/hot');
@@ -201,7 +213,7 @@ def index():
                 let hotDiv = document.getElementById('hot_top3');
                 hotDiv.innerHTML = "🏆 ТОП-3 продажі:";
                 hot.top3.forEach((item, index) => {
-                    hotDiv.innerHTML += `<div class="item">${index+1}) ${item[0]} — ${item[1]}</div>`;
+                    hotDiv.innerHTML += `<div class="item">${medal(index)} ${item[0]} — ${item[1]}</div>`;
                 });
 
                 const coldRes = await fetch('/api/cold');
@@ -210,18 +222,24 @@ def index():
                 let coldDiv = document.getElementById('cold_top3');
                 coldDiv.innerHTML = "🏆 ТОП-3 продажі:";
                 cold.top3.forEach((item, index) => {
-                    coldDiv.innerHTML += `<div class="item">${index+1}) ${item[0]} — ${item[1]}</div>`;
+                    coldDiv.innerHTML += `<div class="item">${medal(index)} ${item[0]} — ${item[1]}</div>`;
                 });
 
                 // Общая сумма
-                document.getElementById('all_total').innerText =
-                    "Загальна кількість замовлень: " + (hot.total + cold.total);
+                const all = hot.total + cold.total;
+                const totalDiv = document.getElementById('all_total');
+                totalDiv.innerText = "Загальна кількість замовлень: " + all;
+                totalDiv.style.color = all > 100 ? "lime" : (all > 50 ? "yellow" : "red");
+
+                // Время обновления
+                const now = new Date();
+                document.getElementById('updated_time').innerText = "Оновлено: " + now.toLocaleTimeString();
             } catch (e) {
                 console.error("Ошибка обновления:", e);
             }
         }
 
-        setInterval(updateData, 30000); // обновлять каждые 30 секунд
+        setInterval(updateData, 30000);
         window.onload = updateData;
         </script>
     </body>
