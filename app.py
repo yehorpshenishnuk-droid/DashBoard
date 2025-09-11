@@ -1,6 +1,7 @@
 import os
 import time
 import requests
+import sys
 from flask import Flask, render_template_string
 
 app = Flask(__name__)
@@ -51,10 +52,14 @@ def fetch_sales():
     url = f"https://joinposter.com/api/report.getProductsSales?token={POSTER_TOKEN}"
     resp = requests.get(url)
 
-    # DEBUG вывод для Render logs
-    print("DEBUG Poster API response:", resp.text[:500])
+    # DEBUG вывод для Render logs (в stderr, чтобы точно попал)
+    print("DEBUG Poster API response:", resp.text[:1000], file=sys.stderr, flush=True)
 
-    data = resp.json().get("response", [])
+    try:
+        data = resp.json().get("response", [])
+    except Exception as e:
+        print("ERROR parsing JSON:", e, file=sys.stderr, flush=True)
+        return {"total": 0, "top3": [("Ошибка", 0)]}
 
     sales_count = {}
     total_checks = 0
@@ -88,7 +93,7 @@ def index():
             last_update = time.time()
         except Exception as e:
             hot_data = {"total": 0, "top3": [("Ошибка", 0)]}
-            print("ERROR fetch_sales:", e)
+            print("ERROR fetch_sales:", e, file=sys.stderr, flush=True)
 
     template = """
     <html>
