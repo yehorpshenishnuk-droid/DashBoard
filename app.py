@@ -1,87 +1,110 @@
 import os
+import time
 import requests
 from flask import Flask, render_template_string
-from datetime import datetime
 
 app = Flask(__name__)
 
-# Токен берется из переменной окружения
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")
 
-if not POSTER_TOKEN:
-    raise Exception("❌ Не найден POSTER_TOKEN. Установи переменную окружения.")
-
-# ID товаров
-CHEBUREKI_YANTYKI_IDS = {
-    "14", "8", "243", "327", "347", "12", "13",  # Чебуреки
-    "244", "502", "349", "74", "73", "75", "76", "375"  # Янтики
+# Список горячего цеха (id: название)
+HOT_DISHES = {
+    14: "Чебурек з моцарелою та сулугуні",
+    8: "Чебурек з телятиною",
+    243: "Чебурек з томатами та грибами",
+    327: "Чебурек з вишнею та вершковим крем сиром",
+    347: "Чебурек з баранниною",
+    12: "Чебурек з свининою",
+    13: "Чебурек з куркою",
+    515: "Телячі щічки з картопляним пюре, 330 г",
+    244: "Янтик з томатами та грибами",
+    502: "Янтик з фермерським сиром і зеленью",
+    349: "Янтик з бараниною",
+    74: "Янтик з свининою",
+    73: "Янтик з куркою",
+    75: "Янтик з моцарелою та сулугуні",
+    76: "Янтик з телятиною",
+    375: "Янтик з телятиною та сиром чедер",
+    154: "Плов який Ви полюбите",
+    210: "Піде з телятиною",
+    545: "Піде з моцарелою , томатами та песто",
+    290: "Люля-кебаб з трьома видами м'яса",
+    528: "Ніжне куряче стегно гриль, 360",
+    296: "М'ясний сет 1,770",
+    325: "Люля-кебаб з сиром та трьома видами м'яса",
+    295: "Реберця в медово-гірчичному соусі",
+    222: "Телятина на грилі",
+    72: "Філе молодої курки",
+    71: "Шийна частина свинини",
+    209: "Піде з куркою та томатами",
+    360: "Сирне піде з інжиром та фісташкою",
+    208: "Піде з сиром та часниковим соусом",
 }
-PIDE_IDS = {
-    "210", "545", "209", "360", "208"
-}
 
-# Получение продаж за сегодня
-def fetch_today_sales():
-    today = datetime.now().strftime("%Y-%m-%d")
-
-    url = f"https://joinposter.com/api/transactions.getTransactions?token={POSTER_TOKEN}&date_from={today}&date_to={today}"
-    try:
-        response = requests.get(url, timeout=10)
-        response.raise_for_status()
-        data = response.json().get("response", {}).get("data", [])
-    except Exception as e:
-        print(f"❌ Ошибка при запросе данных: {e}")
-        return 0, 0
-
-    chebureki_count = 0
-    pide_count = 0
-
-    for transaction in data:
-        for product in transaction.get("products", []):
-            product_id = str(product.get("product_id"))
-            num = int(product.get("num", 0))
-
-            if product_id in CHEBUREKI_YANTYKI_IDS:
-                chebureki_count += num
-            elif product_id in PIDE_IDS:
-                pide_count += num
-
-    return chebureki_count, pide_count
+# Кэш данных (обновляется каждые 30 секунд)
+last_update = 0
+hot_data = {}
 
 
-# HTML-шаблон
-HTML = """
-<!DOCTYPE html>
-<html lang="uk">
-<head>
-    <meta charset="UTF-8">
-    <title>Дашборд продажів</title>
-    <meta http-equiv="refresh" content="30"> <!-- автообновление каждые 30 сек -->
-    <style>
-        body { font-family: Arial, sans-serif; background: #111; color: #fff; text-align: center; padding: 50px; }
-        h1 { font-size: 48px; }
-        .value { font-size: 80px; margin: 20px 0; }
-        .label { font-size: 24px; color: #ccc; }
-    </style>
-</head>
-<body>
-    <h1>📊 Продажі за сьогодні</h1>
-    <div class="value">{{ chebureki }}</div>
-    <div class="label">Чебуреки + Янтики</div>
-    <div class="value">{{ pide }}</div>
-    <div class="label">Піде</div>
-    <p style="margin-top: 50px; color: #666;">Оновлюється кожні 30 секунд</p>
-</body>
-</html>
-"""
+def fetch_sales():
+    """Получаем продажи из Poster API"""
+    url = f"https://joinposter.com/api/report.getSales?token={POSTER_TOKEN}"
+    resp = requests.get(url)
+    data = resp.json().get("response", [])
 
-# Маршрут на главную страницу
-@app.route('/')
-def dashboard():
-    chebureki, pide = fetch_today_sales()
-    return render_template_string(HTML, chebureki=chebureki, pide=pide)
+    sales_count = {}
+    total_checks = 0
 
-# Запуск
-if __name__ == '__main__':
-    port = int(os.environ.get("PORT", 10000))
-    app.run(host="0.0.0.0", port=port)
+    for item in data:
+        product_id = int(item.get("product_id", 0))
+        quantity = int(float(item.get("num_sales", 0)))
+        if product_id in HOT_DISHES:
+            sales_count[product_id] = sales_count.get(product_id, 0) + quantity
+            total_checks += quantity
+
+    # Сортировка по количеству
+    top3 = sorted(sales_count.items(), key=lambda x: x[1], reverse=True)[:3]
+
+    return {
+        "total": total_checks,
+        "top3": [(HOT_DISHES[i], c) for i, c in top3]
+    }
+
+
+@app.route("/")
+def index():
+    global last_update, hot_data
+    if time.time() - last_update > 30:  # обновляем каждые 30 секунд
+        try:
+            hot_data = fetch_sales()
+            last_update = time.time()
+        except Exception as e:
+            hot_data = {"total": 0, "top3": [("Ошибка", 0)]}
+
+    template = """
+    <html>
+    <head>
+        <meta http-equiv="refresh" content="30">
+        <style>
+            body { font-family: Arial, sans-serif; background: #111; color: #eee; text-align: center; }
+            h2 { color: orange; }
+            .block { margin: 30px auto; width: 400px; padding: 20px; border: 2px solid orange; border-radius: 10px; }
+            .item { font-size: 20px; margin: 5px 0; }
+        </style>
+    </head>
+    <body>
+        <div class="block">
+            <h2>🔥 Горячий ЦЕХ</h2>
+            <p>{{ hot.total }} чеков</p>
+            {% for name, count in hot.top3 %}
+                <div class="item">{{ loop.index }}) {{ name }} — {{ count }}</div>
+            {% endfor %}
+        </div>
+    </body>
+    </html>
+    """
+    return render_template_string(template, hot=hot_data)
+
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000)
