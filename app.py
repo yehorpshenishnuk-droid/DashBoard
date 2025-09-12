@@ -2,7 +2,11 @@ import os
 import time
 import requests
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta, timezone
+try:
+    from zoneinfo import ZoneInfo  # Python 3.9+
+except Exception:
+    ZoneInfo = None
 from flask import Flask, render_template_string, jsonify
 
 app = Flask(__name__)
@@ -10,25 +14,24 @@ app = Flask(__name__)
 # ======================
 # Токены и настройки
 # ======================
-POSTER_TOKEN = os.getenv("POSTER_TOKEN")
-ACCOUNT_NAME = "poka-net3"
+POSTER_TOKEN = os.getenv("POSTER_TOKEN")  # Токен Poster (обязательно)
+ACCOUNT_NAME = "poka-net3"                # subdomain в Poster/Choice
 CHOICE_TOKEN = os.getenv("CHOICE_TOKEN", "VlFmffA-HWXnYEm-cOXRIze-FDeVdAw")
 
 # ======================
-# Категории Poster POS ID
+# Категории Poster POS ID -> Группы отображения
 # ======================
-
 HOT_CATEGORIES = {
-    4: "Чебуреки/Янтики",
-    13: "М'ясні страви",
-    15: "Чебуреки/Янтики",
-    46: "Гарячі страви",
-    33: "Піде",
+    4:  "Чебуреки/Янтики",   # ЧЕБУРЕКИ
+    15: "Чебуреки/Янтики",   # ЯНТИКИ
+    33: "Піде",              # ПИДЕ
+    13: "М'ясні страви",     # МЯСНІ СТРАВИ
+    46: "Гарячі страви",     # ГОРЯЧІ СТРАВИ
 }
 
 COLD_CATEGORIES = {
-    7: "Манти",
-    8: "Деруни",
+    7:  "Манти",
+    8:  "Деруни",
     11: "Салати",
     16: "Супи",
     18: "Млинці та сирники",
@@ -39,102 +42,106 @@ COLD_CATEGORIES = {
     44: "Власне виробництво",
 }
 
-last_update = 0
-cache = {"hot": {}, "cold": {}, "bookings": {}, "categories": {}}
+cache = {"hot": {}, "cold": {}, "bookings": {}}
+TTL_SECONDS = 30  # кэш 30 сек
 
 
 # ======================
-# Poster API
+# Poster API — продажи по категориям
 # ======================
-def fetch_sales(group_mode=True):
-    """Получаем продажи из Poster API за текущий день"""
-    today = date.today().strftime("%Y-%m-%d")
+def fetch_sales(category_map):
+    today = date.today().strftime("%Y%m%d")
     url = (
-        f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getProductsSales"
-        f"?token={POSTER_TOKEN}&date_from={today}&date_to={today}"
+        f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getCategoriesSales"
+        f"?token={POSTER_TOKEN}&dateFrom={today}&dateTo={today}"
     )
 
-    resp = requests.get(url)
-    print("DEBUG Poster API response:", resp.text[:500], file=sys.stderr, flush=True)
+    resp = requests.get(url, timeout=20)
+    print("DEBUG Poster API:", resp.text[:500], file=sys.stderr, flush=True)
 
     try:
         data = resp.json().get("response", [])
     except Exception as e:
-        print("ERROR parsing JSON:", e, file=sys.stderr, flush=True)
+        print("ERROR Poster JSON:", e, file=sys.stderr, flush=True)
         return {"total": 0, "items": []}
 
-    sales_count = {}
-    total_orders = 0
+    counts = {}
+    total = 0
 
-    for item in data:
-        quantity = int(float(item.get("count", 0)))
-        cat_id = item.get("menu_category_id")
+    for cat in data:
+        cat_id = int(cat.get("category_id", 0))
+        qty = int(float(cat.get("count", 0)))
+        if cat_id in category_map:
+            label = category_map[cat_id]
+            counts[label] = counts.get(label, 0) + qty
+            total += qty
 
-        try:
-            cat_id = int(cat_id)
-        except:
-            continue
-
-        if group_mode and cat_id in HOT_CATEGORIES:
-            key = HOT_CATEGORIES[cat_id]
-            sales_count[key] = sales_count.get(key, 0) + quantity
-            total_orders += quantity
-        elif not group_mode and cat_id in COLD_CATEGORIES:
-            key = COLD_CATEGORIES[cat_id]
-            sales_count[key] = sales_count.get(key, 0) + quantity
-            total_orders += quantity
-
-    top3 = sorted(sales_count.items(), key=lambda x: x[1], reverse=True)[:3]
-    return {"total": total_orders, "items": top3}
+    items = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:3]
+    return {"total": total, "items": items}
 
 
-def fetch_categories():
-    """Получаем список категорий из Poster API"""
-    url = f"https://{ACCOUNT_NAME}.joinposter.com/api/menu.getCategories?token={POSTER_TOKEN}"
-    resp = requests.get(url)
-    print("DEBUG menu.getCategories:", resp.text[:500], file=sys.stderr, flush=True)
-
+# ======================
+# Choice API — Бронювання
+# ======================
+def _today_range_utc():
     try:
-        data = resp.json().get("response", [])
-    except Exception as e:
-        print("ERROR menu.getCategories:", e, file=sys.stderr, flush=True)
-        return []
+        tz = ZoneInfo("Europe/Kyiv") if ZoneInfo else timezone(timedelta(hours=3))
+    except Exception:
+        tz = timezone(timedelta(hours=3))
 
-    return [{"id": int(c["category_id"]), "name": c["category_name"]} for c in data]
+    now_local = datetime.now(tz)
+    start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
+    end_local = start_local + timedelta(days=1)
+
+    start_utc = start_local.astimezone(timezone.utc)
+    end_utc = end_local.astimezone(timezone.utc)
+
+    return start_utc.isoformat().replace("+00:00", "Z"), end_utc.isoformat().replace("+00:00", "Z")
 
 
-# ======================
-# Choice API (бронювання)
-# ======================
 def fetch_bookings():
-    """Получаем список броней из Choice API"""
+    start_iso, end_iso = _today_range_utc()
     url = f"https://{ACCOUNT_NAME}.choiceqr.com/api/bookings/list"
     headers = {"Authorization": f"Bearer {CHOICE_TOKEN}"}
-    params = {"perPage": 5, "page": 1}
+    params = {"perPage": 5, "page": 1, "from": start_iso, "till": end_iso, "periodField": "bookingDt"}
 
-    resp = requests.get(url, headers=headers, params=params)
-    print("DEBUG bookings response:", resp.text[:300], file=sys.stderr, flush=True)
+    resp = requests.get(url, headers=headers, params=params, timeout=20)
+    print("DEBUG Choice API:", resp.status_code, resp.text[:300], file=sys.stderr, flush=True)
 
     try:
         data = resp.json()
     except Exception as e:
-        print("ERROR Choice API:", e, file=sys.stderr, flush=True)
+        print("ERROR Choice JSON:", e, file=sys.stderr, flush=True)
         return {"total": 0, "items": []}
 
+    items = None
+    for key in ("items", "data", "list", "bookings"):
+        v = data.get(key)
+        if isinstance(v, list):
+            items = v
+            break
+    if items is None:
+        items = []
+
+    total = data.get("totalCount") or data.get("total") or len(items)
+
     bookings = []
-    for b in data.get("data", []):
-        customer = b.get("customer", {})
+    for b in items:
+        customer = b.get("customer") or {}
         name = customer.get("name", "—")
-        guests = b.get("personCount", 0)
-        dt = b.get("dateTime")
-        try:
-            time_str = datetime.fromisoformat(dt.replace("Z", "+00:00")).strftime("%H:%M")
-        except Exception:
-            time_str = dt
+        guests = b.get("personCount") or b.get("guests") or 0
+        dt_raw = b.get("dateTime") or b.get("bookingDt") or b.get("startDateTime")
+        time_str = dt_raw
+        if isinstance(dt_raw, str):
+            try:
+                dt_parsed = datetime.fromisoformat(dt_raw.replace("Z", "+00:00"))
+                tz = ZoneInfo("Europe/Kyiv") if ZoneInfo else timezone(timedelta(hours=3))
+                time_str = dt_parsed.astimezone(tz).strftime("%H:%M")
+            except Exception:
+                pass
         bookings.append({"name": name, "time": time_str, "guests": guests})
 
-    total = data.get("totalCount", len(bookings))
-    return {"total": total, "items": bookings}
+    return {"total": int(total) if isinstance(total, (int, float)) else total, "items": bookings}
 
 
 # ======================
@@ -142,31 +149,25 @@ def fetch_bookings():
 # ======================
 @app.route("/api/hot")
 def api_hot():
-    global last_update, cache
-    if time.time() - last_update > 30:
-        cache["hot"] = fetch_sales(group_mode=True)
+    if time.time() - cache["hot"].get("ts", 0) > TTL_SECONDS:
+        cache["hot"] = fetch_sales(HOT_CATEGORIES)
+        cache["hot"]["ts"] = time.time()
     return jsonify(cache["hot"])
 
 
 @app.route("/api/cold")
 def api_cold():
-    global last_update, cache
-    if time.time() - last_update > 30:
-        cache["cold"] = fetch_sales(group_mode=False)
-        last_update = time.time()
+    if time.time() - cache["cold"].get("ts", 0) > TTL_SECONDS:
+        cache["cold"] = fetch_sales(COLD_CATEGORIES)
+        cache["cold"]["ts"] = time.time()
     return jsonify(cache["cold"])
 
 
 @app.route("/api/bookings")
 def api_bookings():
     cache["bookings"] = fetch_bookings()
+    cache["bookings"]["ts"] = time.time()
     return jsonify(cache["bookings"])
-
-
-@app.route("/api/categories")
-def api_categories():
-    cache["categories"] = fetch_categories()
-    return jsonify(cache["categories"])
 
 
 # ======================
@@ -179,15 +180,15 @@ def index():
     <head>
         <style>
             body { font-family: Arial, sans-serif; background: #111; color: #eee; text-align: center; }
-            h2 { font-size: 40px; margin-bottom: 20px; }
-            .grid { display: flex; justify-content: center; gap: 50px; max-width: 1600px; margin: auto; flex-wrap: wrap; }
-            .block { width: 450px; padding: 30px; border-radius: 15px; box-shadow: 0 0 20px rgba(0,0,0,0.7); animation: fadeIn 1s; }
+            h2 { font-size: 36px; margin-bottom: 15px; }
+            .grid { display: flex; justify-content: center; gap: 40px; max-width: 1600px; margin: auto; flex-wrap: wrap; }
+            .block { width: 450px; padding: 25px; border-radius: 15px; box-shadow: 0 0 20px rgba(0,0,0,0.7); animation: fadeIn 1s; }
             .hot { border: 4px solid #ff6600; }
             .cold { border: 4px solid #0099ff; }
             .bookings { border: 4px solid #00ff00; }
-            .item { font-size: 24px; margin: 8px 0; }
-            .total { margin-top: 20px; font-size: 28px; font-weight: bold; }
-            .updated { margin-top: 10px; font-size: 16px; color: #aaa; }
+            .item { font-size: 22px; margin: 6px 0; }
+            .total { margin-top: 15px; font-size: 26px; font-weight: bold; }
+            .updated { margin-top: 10px; font-size: 14px; color: #aaa; }
             @keyframes fadeIn { from {opacity: 0;} to {opacity: 1;} }
         </style>
     </head>
