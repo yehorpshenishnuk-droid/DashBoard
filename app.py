@@ -1,142 +1,191 @@
 import os
 import requests
-import matplotlib
-matplotlib.use("Agg")
-import matplotlib.pyplot as plt
-import io
-import base64
-from flask import Flask, jsonify, render_template_string
-from datetime import datetime, timedelta
+import datetime
+import dash
+from dash import dcc, html
+import dash_bootstrap_components as dbc
+import plotly.graph_objs as go
 
-app = Flask(__name__)
-
-# === Настройки ===
+# === API TOKENS ===
 POSTER_TOKEN = os.getenv("POSTER_TOKEN", "687409:4164553abf6a031302898da7800b59fb")
-POSTER_API = "https://poka-net3.joinposter.com/api"
+CHOICE_TOKEN = os.getenv("CHOICE_TOKEN", "VlFmffA-HWXnYEm-cOXRIze-FDeVdAw")
 
-# Горячий и холодный цех по category_id
-HOT_CATEGORIES = [4, 13, 15, 46, 33]   # Чебуреки, Мясні, Янтики, Горячі страви, Піде
-COLD_CATEGORIES = [7, 8, 11, 16, 18, 19, 29, 32, 36, 44]  # Манти, Деруни, Салати, Супи и т.д.
+# === CATEGORY IDS ===
+HOT_CATEGORIES = {
+    "ЧЕБУРЕКИ": 4,
+    "МЯСНІ СТРАВИ": 13,
+    "ЯНТИКИ": 15,
+    "ГОРЯЧІ СТРАВИ": 46,
+    "ПИДЕ": 33
+}
+COLD_CATEGORIES = {
+    "МАНТЫ": 7,
+    "ДЕРУНИ": 8,
+    "САЛАТИ": 11,
+    "СУПИ": 16,
+    "МЛИНЦІ та СИРНИКИ": 18,
+    "ЗАКУСКИ": 19,
+    "ПІСНЕ МЕНЮ": 29,
+    "ДЕСЕРТИ": 32,
+    "СНІДАНКИ": 36,
+    "Власне виробництво": 44
+}
 
+# === FETCH SALES BY CATEGORY ===
+def get_category_sales(date_from, date_to):
+    url = f"https://poka-net3.joinposter.com/api/dash.getCategoriesSales"
+    params = {"token": POSTER_TOKEN, "dateFrom": date_from, "dateTo": date_to}
+    r = requests.get(url, params=params)
+    data = r.json().get("response", [])
+    return {int(item["category_id"]): float(item["count"]) for item in data}
 
-# === Функции ===
+# === FETCH BOOKINGS ===
+def get_bookings():
+    url = "https://poka-net3.choiceqr.com/api/bookings/list"
+    headers = {"Authorization": f"Bearer {CHOICE_TOKEN}"}
+    try:
+        r = requests.get(url, headers=headers, timeout=10)
+        if r.status_code == 200:
+            data = r.json()
+            return len(data.get("response", [])) if isinstance(data, dict) else 0
+    except Exception:
+        return 0
+    return 0
 
-def get_transactions(date_from: str, date_to: str):
-    """Получить список транзакций с Poster API"""
-    url = f"{POSTER_API}/transactions.getTransactions"
+# === HOURLY SALES (transactions.getTransactions) ===
+def get_hourly_sales(date_from, date_to):
+    url = "https://poka-net3.joinposter.com/api/transactions.getTransactions"
     params = {
         "token": POSTER_TOKEN,
         "date_from": date_from,
         "date_to": date_to,
         "per_page": 500,
-        "page": 1,
+        "page": 1
     }
-    res = requests.get(url, params=params)
-    data = res.json()
-    return data.get("response", {}).get("data", [])
+    r = requests.get(url, params=params)
+    data = r.json().get("response", {}).get("data", [])
 
+    hot_counts = {}
+    cold_counts = {}
 
-def get_hourly_sales(target_date: datetime):
-    """Посчитать почасовые продажи по горячему и холодному цеху"""
-    date_str = target_date.strftime("%Y-%m-%d")
-    transactions = get_transactions(date_str, date_str)
+    for tr in data:
+        hour = datetime.datetime.strptime(tr["date_close"], "%Y-%m-%d %H:%M:%S").hour
+        for p in tr.get("products", []):
+            cat_id = p.get("workshop_id")
+            num = float(p.get("num", 0))
+            if cat_id in HOT_CATEGORIES.values():
+                hot_counts[hour] = hot_counts.get(hour, 0) + num
+            elif cat_id in COLD_CATEGORIES.values():
+                cold_counts[hour] = cold_counts.get(hour, 0) + num
 
-    hourly_hot = {h: 0 for h in range(10, 23)}
-    hourly_cold = {h: 0 for h in range(10, 23)}
+    return hot_counts, cold_counts
 
-    for tx in transactions:
-        close_time = datetime.strptime(tx["date_close"], "%Y-%m-%d %H:%M:%S")
-        hour = close_time.hour
-        if 10 <= hour <= 22:
-            for p in tx.get("products", []):
-                category_id = int(p.get("category_id", 0)) if "category_id" in p else None
-                count = float(p.get("num", 0))
-                if category_id in HOT_CATEGORIES:
-                    hourly_hot[hour] += count
-                elif category_id in COLD_CATEGORIES:
-                    hourly_cold[hour] += count
+# === AGGREGATED SALES BLOCKS ===
+def build_sales_blocks(today_sales):
+    hot_total = {k: today_sales.get(v, 0) for k, v in HOT_CATEGORIES.items()}
+    cold_total = {k: today_sales.get(v, 0) for k, v in COLD_CATEGORIES.items()}
 
-    # Делаем накопительные суммы
-    hot_cumulative = []
-    cold_cumulative = []
-    total_hot = 0
-    total_cold = 0
-    for h in range(10, 23):
-        total_hot += hourly_hot[h]
-        total_cold += hourly_cold[h]
-        hot_cumulative.append(total_hot)
-        cold_cumulative.append(total_cold)
+    hot_block = dbc.Card(
+        dbc.CardBody([
+            html.H4("🔥 Гарячий цех", className="text-center"),
+            dbc.Table(
+                [html.Tr([html.Td(k), html.Td(int(v))]) for k, v in hot_total.items()],
+                bordered=False, striped=False, hover=False, responsive=True
+            )
+        ]), className="h-100 text-white bg-dark border border-danger rounded-3"
+    )
 
-    return hot_cumulative, cold_cumulative
+    cold_block = dbc.Card(
+        dbc.CardBody([
+            html.H4("❄️ Холодний цех", className="text-center"),
+            dbc.Table(
+                [html.Tr([html.Td(k), html.Td(int(v))]) for k, v in cold_total.items()],
+                bordered=False, striped=False, hover=False, responsive=True
+            )
+        ]), className="h-100 text-white bg-dark border border-primary rounded-3"
+    )
 
+    bookings_block = dbc.Card(
+        dbc.CardBody([
+            html.H4("📖 Бронювання", className="text-center"),
+            html.H2(get_bookings(), className="text-center text-success fw-bold")
+        ]), className="h-100 text-white bg-dark border border-success rounded-3"
+    )
 
-def generate_chart():
-    """Сгенерировать график с текущим днём и прошлой неделей"""
-    today = datetime.now()
-    last_week = today - timedelta(days=7)
+    return hot_block, cold_block, bookings_block
 
-    hot_today, cold_today = get_hourly_sales(today)
-    hot_last, cold_last = get_hourly_sales(last_week)
-
+# === BUILD GRAPH ===
+def build_graph(today, last_week):
     hours = list(range(10, 23))
-    now_hour = today.hour
+    now_hour = datetime.datetime.now().hour
+    limit_hour = min(now_hour, 22)
 
-    # Ограничиваем данные текущим временем (обрезаем будущее)
-    cutoff_index = max(0, min(len(hours), now_hour - 10 + 1))
-    hot_today = hot_today[:cutoff_index]
-    cold_today = cold_today[:cutoff_index]
-    hours_today = hours[:cutoff_index]
+    hot_today, cold_today = get_hourly_sales(today, today)
+    hot_last, cold_last = get_hourly_sales(last_week, last_week)
 
-    plt.figure(figsize=(10, 4))
-    # Текущий день (жирные линии)
-    plt.plot(hours_today, hot_today, color="orange", linewidth=2.5, label="Гарячий (сьогодні)")
-    plt.plot(hours_today, cold_today, color="deepskyblue", linewidth=2.5, label="Холодний (сьогодні)")
+    hot_cum, cold_cum = [], []
+    hot_last_cum, cold_last_cum = [], []
 
-    # Прошлая неделя (пунктир)
-    plt.plot(hours, hot_last, color="orange", linestyle="--", linewidth=1.8, label="Гарячий (мин. тиждень)")
-    plt.plot(hours, cold_last, color="deepskyblue", linestyle="--", linewidth=1.8, label="Холодний (мин. тиждень)")
+    hot_sum = cold_sum = hot_last_sum = cold_last_sum = 0
+    for h in hours:
+        if h <= limit_hour:
+            hot_sum += hot_today.get(h, 0)
+            cold_sum += cold_today.get(h, 0)
+        hot_cum.append(hot_sum)
 
-    plt.title("📊 Завантаженість кухні", fontsize=14, fontweight="bold")
-    plt.xlabel("Година")
-    plt.ylabel("Кількість замовлень (накопич.)")
-    plt.xticks(hours)
-    plt.grid(True, linestyle="--", alpha=0.3)
-    plt.legend()
-    plt.tight_layout()
+        if h <= 22:
+            hot_last_sum += hot_last.get(h, 0)
+            cold_last_sum += cold_last.get(h, 0)
+        hot_last_cum.append(hot_last_sum)
+        cold_last_cum.append(cold_last_sum)
+        cold_cum.append(cold_sum)
 
-    # Сохраняем график в base64
-    img = io.BytesIO()
-    plt.savefig(img, format="png", transparent=True)
-    img.seek(0)
-    graph_url = base64.b64encode(img.getvalue()).decode()
-    plt.close()
-    return f"data:image/png;base64,{graph_url}"
+    fig = go.Figure()
+    fig.add_trace(go.Scatter(x=hours, y=hot_cum, mode="lines+markers",
+                             line=dict(color="orange", width=3),
+                             name="Гарячий (сьогодні)"))
+    fig.add_trace(go.Scatter(x=hours, y=cold_cum, mode="lines+markers",
+                             line=dict(color="skyblue", width=3),
+                             name="Холодний (сьогодні)"))
+    fig.add_trace(go.Scatter(x=hours, y=hot_last_cum, mode="lines",
+                             line=dict(color="orange", dash="dot", width=2),
+                             name="Гарячий (мин. тиждень)"))
+    fig.add_trace(go.Scatter(x=hours, y=cold_last_cum, mode="lines",
+                             line=dict(color="skyblue", dash="dot", width=2),
+                             name="Холодний (мин. тиждень)"))
 
+    fig.update_layout(
+        title="📊 Завантаженість кухні",
+        xaxis=dict(title="Година", dtick=1, range=[10, 22]),
+        yaxis=dict(title="Кількість замовлень (накопич.)"),
+        plot_bgcolor="#111", paper_bgcolor="#111",
+        font=dict(color="white"), height=350
+    )
+    return dcc.Graph(figure=fig)
 
-# === Роуты ===
+# === DASH APP ===
+app = dash.Dash(__name__, external_stylesheets=[dbc.themes.CYBORG])
 
-@app.route("/")
-def dashboard():
-    chart_url = generate_chart()
-    template = """
-    <html>
-    <head>
-      <meta charset="utf-8">
-      <style>
-        body { background: #111; color: white; font-family: Inter, sans-serif; }
-        .block { border: 2px solid orange; border-radius: 12px; padding: 10px; margin: 10px; text-align: center; }
-        img { max-width: 100%; }
-      </style>
-    </head>
-    <body>
-      <div class="block">
-        <img src="{{chart_url}}" />
-      </div>
-    </body>
-    </html>
-    """
-    return render_template_string(template, chart_url=chart_url)
+def serve_layout():
+    today = datetime.date.today()
+    last_week = today - datetime.timedelta(days=7)
+    date_today = today.strftime("%Y%m%d")
+    date_last = last_week.strftime("%Y%m%d")
 
+    today_sales = get_category_sales(date_today, date_today)
+    hot_block, cold_block, bookings_block = build_sales_blocks(today_sales)
+    graph_block = build_graph(today.strftime("%Y-%m-%d"), last_week.strftime("%Y-%m-%d"))
+
+    return dbc.Container([
+        dbc.Row([
+            dbc.Col(hot_block, md=4),
+            dbc.Col(cold_block, md=4),
+            dbc.Col(bookings_block, md=4)
+        ], className="mb-4"),
+        dbc.Row([dbc.Col(graph_block, md=12)])
+    ], fluid=True)
+
+app.layout = serve_layout
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000)
+    app.run_server(host="0.0.0.0", port=5000, debug=True)
