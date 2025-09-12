@@ -11,10 +11,16 @@ from flask import Flask, render_template_string, jsonify
 
 app = Flask(__name__)
 
+# ======================
+# Токены и настройки
+# ======================
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")
 ACCOUNT_NAME = "poka-net3"
 CHOICE_TOKEN = os.getenv("CHOICE_TOKEN", "VlFmffA-HWXnYEm-cOXRIze-FDeVdAw")
 
+# ======================
+# Категории Poster POS ID -> Группы отображения
+# ======================
 HOT_CATEGORIES = {
     4:  "Чебуреки/Янтики",
     15: "Чебуреки/Янтики",
@@ -40,6 +46,9 @@ cache = {"hot": {}, "cold": {}, "bookings": {}, "hourly": {}}
 TTL_SECONDS = 30
 
 
+# ======================
+# Poster API — продажи по категориям
+# ======================
 def fetch_sales(category_map):
     today = date.today().strftime("%Y%m%d")
     url = (
@@ -69,6 +78,62 @@ def fetch_sales(category_map):
     return {"total": total, "items": items}
 
 
+# ======================
+# Poster API — почасовые продажи
+# ======================
+def fetch_hourly():
+    today = date.today().strftime("%Y-%m-%d")
+    url = (
+        f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getProductsSales"
+        f"?token={POSTER_TOKEN}&date_from={today}&date_to={today}"
+    )
+    resp = requests.get(url, timeout=20)
+    print("DEBUG Hourly Poster API:", resp.text[:200], file=sys.stderr, flush=True)
+
+    try:
+        data = resp.json().get("response", [])
+    except Exception as e:
+        print("ERROR Hourly Poster JSON:", e, file=sys.stderr, flush=True)
+        return {"labels": [], "hot": [], "cold": []}
+
+    hours = list(range(8, 24))
+    hot_counts = [0] * len(hours)
+    cold_counts = [0] * len(hours)
+
+    for item in data:
+        try:
+            dt_str = item.get("date")  # "2025-09-12 14:23:10"
+            cat_id = int(item.get("menu_category_id", 0))
+            qty = int(float(item.get("count", 0)))
+            dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+            hour = dt.hour
+        except Exception:
+            continue
+
+        if hour in hours:
+            idx = hours.index(hour)
+            if cat_id in HOT_CATEGORIES:
+                hot_counts[idx] += qty
+            elif cat_id in COLD_CATEGORIES:
+                cold_counts[idx] += qty
+
+    hot_cumulative = []
+    cold_cumulative = []
+    total_hot = 0
+    total_cold = 0
+    for h, c in zip(hot_counts, cold_counts):
+        total_hot += h
+        total_cold += c
+        hot_cumulative.append(total_hot)
+        cold_cumulative.append(total_cold)
+
+    labels = [f"{h:02d}:00" for h in hours]
+    return {"labels": labels, "hot": hot_cumulative, "cold": cold_cumulative}
+
+
+# ======================
+# Choice API — Бронювання
+# ======================
 def _today_range_utc():
     try:
         tz = ZoneInfo("Europe/Kyiv") if ZoneInfo else timezone(timedelta(hours=3))
@@ -126,14 +191,9 @@ def fetch_bookings():
     return {"total": int(total) if isinstance(total, (int, float)) else total, "items": bookings}
 
 
-def fetch_hourly():
-    # Здесь для примера — просто "накопительная заглушка".
-    # Можно заменить на dash.getProductsSales и парсить время заказов.
-    hours = [f"{h:02d}:00" for h in range(8, 24)]
-    values = [i * 5 for i in range(len(hours))]  # Заглушка: возрастающие значения
-    return {"labels": hours, "values": values}
-
-
+# ======================
+# API endpoints
+# ======================
 @app.route("/api/hot")
 def api_hot():
     if time.time() - cache["hot"].get("ts", 0) > TTL_SECONDS:
@@ -163,6 +223,9 @@ def api_hourly():
     return jsonify(cache["hourly"])
 
 
+# ======================
+# UI
+# ======================
 @app.route("/")
 def index():
     template = """
@@ -177,7 +240,7 @@ def index():
             .hot { border: 3px solid #ff6600; }
             .cold { border: 3px solid #0099ff; }
             .bookings { border: 3px solid #00ff00; }
-            .chart { border: 3px solid #ffaa00; }
+            .chart { border: 3px solid #ffaa00; width: 820px; }
             table { width: 100%; border-collapse: collapse; font-size: 16px; }
             td { padding: 4px; text-align: left; }
             td:last-child { text-align: right; }
@@ -203,7 +266,7 @@ def index():
             </div>
             <div class="block chart">
                 <h2>📊 Діаграма</h2>
-                <canvas id="ordersChart" width="350" height="250"></canvas>
+                <canvas id="ordersChart" width="800" height="400"></canvas>
             </div>
         </div>
         <div class="logo">GRECO</div>
@@ -229,8 +292,21 @@ def index():
             const ctx = document.getElementById('ordersChart').getContext('2d');
             new Chart(ctx, {
                 type: 'line',
-                data: { labels: hourly.labels, datasets: [{ label: 'Замовлення', data: hourly.values, borderColor: 'orange', fill: false }] },
-                options: { responsive: false, scales: { y: { beginAtZero: true } } }
+                data: {
+                    labels: hourly.labels,
+                    datasets: [
+                        { label: 'Гарячий цех', data: hourly.hot, borderColor: 'orange', fill: false },
+                        { label: 'Холодний цех', data: hourly.cold, borderColor: 'skyblue', fill: false }
+                    ]
+                },
+                options: {
+                    responsive: false,
+                    plugins: { legend: { labels: { color: 'white' } } },
+                    scales: {
+                        x: { ticks: { color: 'white' } },
+                        y: { beginAtZero: true, ticks: { color: 'white' } }
+                    }
+                }
             });
         }
         updateData();
