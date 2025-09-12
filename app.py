@@ -8,90 +8,137 @@ from flask import Flask, render_template_string, jsonify
 app = Flask(__name__)
 
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")
+CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")  # токен для Choice API
 ACCOUNT_NAME = "poka-net3"
 
-# Категории для подсчета
-HOT_CATEGORIES = {4, 13, 15, 46, 33}  # ЧЕБУРЕКИ, МЯСНІ СТРАВИ, ЯНТИКИ, ГОРЯЧІ СТРАВИ, ПИДЕ
-COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}  # Манты, Деруни, Салаты, Супы и т.д.
+# 🔥 Горячие категории
+HOT_CATEGORIES = {4, 13, 15, 46, 33}
+# ❄️ Холодные категории
+COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 
-CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")
+# Кэш продуктов для product_id → category_id
+PRODUCT_CACHE = {}
+last_products_update = 0
 
+# Кэшированные данные
 last_update = 0
-cache = {"hot": {}, "cold": {}, "bookings": {}, "hourly": {}}
+cache = {"hot": {}, "cold": {}, "bookings": [], "hourly": {}}
 
 
-def fetch_sales():
-    """Получаем продажи по категориям за текущий день"""
-    today = date.today().strftime("%Y%m%d")
+# ======================
+# Загрузка справочника продуктов
+# ======================
+def load_products():
+    global PRODUCT_CACHE, last_products_update
+    if time.time() - last_products_update < 3600 and PRODUCT_CACHE:
+        return PRODUCT_CACHE
+
+    url = f"https://{ACCOUNT_NAME}.joinposter.com/api/menu.getProducts?token={POSTER_TOKEN}&type=products"
+    try:
+        resp = requests.get(url, timeout=20)
+        data = resp.json().get("response", [])
+    except Exception as e:
+        print("ERROR load_products:", e, file=sys.stderr, flush=True)
+        return PRODUCT_CACHE
+
+    mapping = {}
+    for item in data:
+        try:
+            pid = int(item.get("product_id", 0))
+            cid = int(item.get("menu_category_id", 0))
+            if pid and cid:
+                mapping[pid] = cid
+        except Exception:
+            continue
+
+    PRODUCT_CACHE = mapping
+    last_products_update = time.time()
+    print(f"DEBUG Loaded {len(PRODUCT_CACHE)} products into cache", file=sys.stderr, flush=True)
+    return PRODUCT_CACHE
+
+
+# ======================
+# Продажи по категориям (суммарные)
+# ======================
+def fetch_category_sales():
+    today = date.today().strftime("%Y-%m-%d")
     url = (
         f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getCategoriesSales"
         f"?token={POSTER_TOKEN}&dateFrom={today}&dateTo={today}"
     )
     resp = requests.get(url, timeout=20)
-    print("DEBUG Poster API:", resp.text[:200], file=sys.stderr, flush=True)
+    print("DEBUG Poster API:", resp.text[:500], file=sys.stderr, flush=True)
 
     try:
         data = resp.json().get("response", [])
     except Exception as e:
-        print("ERROR parsing JSON:", e, file=sys.stderr, flush=True)
+        print("ERROR parsing Poster JSON:", e, file=sys.stderr, flush=True)
         return {"hot": {}, "cold": {}}
 
-    hot_sales = {}
-    cold_sales = {}
-
-    for item in data:
+    hot, cold = {}, {}
+    for cat in data:
         try:
-            cat_id = int(item.get("category_id", 0))
-            name = item.get("category_name", "").strip()
-            count = int(float(item.get("count", 0)))
+            cid = int(cat.get("category_id", 0))
+            name = cat.get("category_name", "???")
+            qty = int(float(cat.get("count", 0)))
         except Exception:
             continue
 
-        if cat_id in HOT_CATEGORIES:
-            hot_sales[name] = hot_sales.get(name, 0) + count
-        elif cat_id in COLD_CATEGORIES:
-            cold_sales[name] = cold_sales.get(name, 0) + count
+        if cid in HOT_CATEGORIES:
+            hot[name] = hot.get(name, 0) + qty
+        elif cid in COLD_CATEGORIES:
+            cold[name] = cold.get(name, 0) + qty
 
-    return {"hot": hot_sales, "cold": cold_sales}
+    return {"hot": hot, "cold": cold}
 
 
+# ======================
+# Почасовая статистика по заказам
+# ======================
 def fetch_hourly():
-    """Получаем почасовые продажи для диаграммы"""
+    products = load_products()
     today = date.today().strftime("%Y-%m-%d")
-    url = (
-        f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getProductsSales"
-        f"?token={POSTER_TOKEN}&date_from={today}&date_to={today}"
-    )
-    resp = requests.get(url, timeout=20)
-    print("DEBUG Hourly Poster API:", resp.text[:200], file=sys.stderr, flush=True)
 
+    url = (
+        f"https://{ACCOUNT_NAME}.joinposter.com/api/transactions.getTransactions"
+        f"?token={POSTER_TOKEN}&date_from={today}&date_to={today}&per_page=100&page=1"
+    )
     try:
-        data = resp.json().get("response", [])
+        resp = requests.get(url, timeout=30)
+        raw = resp.json().get("response", {}).get("data", [])
+        print("DEBUG Hourly Poster API:", str(raw)[:500], file=sys.stderr, flush=True)
     except Exception as e:
-        print("ERROR Hourly Poster JSON:", e, file=sys.stderr, flush=True)
+        print("ERROR Hourly Poster:", e, file=sys.stderr, flush=True)
         return {"labels": [], "hot": [], "cold": []}
 
     hours = list(range(8, 24))
     hot_counts = [0] * len(hours)
     cold_counts = [0] * len(hours)
 
-    for item in data:
+    for trx in raw:
         try:
-            dt_str = item.get("date_close") or item.get("modified") or item.get("date")
-            cat_id = int(item.get("category_id", 0))
-            qty = int(float(item.get("count", 0)))
+            dt_str = trx.get("date_close")
             dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
             hour = dt.hour
+            if hour not in hours:
+                continue
+            idx = hours.index(hour)
         except Exception:
             continue
 
-        if hour in hours:
-            idx = hours.index(hour)
-            if cat_id in HOT_CATEGORIES:
-                hot_counts[idx] += qty
-            elif cat_id in COLD_CATEGORIES:
-                cold_counts[idx] += qty
+        for p in trx.get("products", []):
+            try:
+                pid = int(p.get("product_id", 0))
+                qty = int(float(p.get("num", 0)))
+                cid = products.get(pid, 0)
+                if cid in HOT_CATEGORIES:
+                    hot_counts[idx] += qty
+                elif cid in COLD_CATEGORIES:
+                    cold_counts[idx] += qty
+            except Exception:
+                continue
 
+    # Накопительные значения
     hot_cumulative, cold_cumulative = [], []
     total_hot, total_cold = 0, 0
     for h, c in zip(hot_counts, cold_counts):
@@ -104,32 +151,43 @@ def fetch_hourly():
     return {"labels": labels, "hot": hot_cumulative, "cold": cold_cumulative}
 
 
+# ======================
+# Бронирования
+# ======================
 def fetch_bookings():
-    """Получаем количество броней из Choice"""
     url = "https://poka-net3.choiceqr.com/api/bookings/list"
     headers = {"Authorization": f"Bearer {CHOICE_TOKEN}"}
     try:
         resp = requests.get(url, headers=headers, timeout=20)
-        print("DEBUG Choice API:", resp.text[:200], file=sys.stderr, flush=True)
         data = resp.json().get("response", [])
-        total = len(data)
-        return {"total": total, "bookings": data[:5]}  # ограничим 5 последних
     except Exception as e:
         print("ERROR Choice API:", e, file=sys.stderr, flush=True)
-        return {"total": 0, "bookings": []}
+        return []
+
+    bookings = []
+    for b in data:
+        bookings.append({
+            "name": b.get("name", "—"),
+            "time": b.get("time", "—"),
+            "guests": b.get("persons", "—"),
+        })
+    return bookings
 
 
+# ======================
+# Flask endpoints
+# ======================
 @app.route("/api/sales")
 def api_sales():
-    global last_update, cache
+    global cache, last_update
     if time.time() - last_update > 60:
-        res = fetch_sales()
-        cache["hot"] = res["hot"]
-        cache["cold"] = res["cold"]
+        sales = fetch_category_sales()
+        cache["hot"] = sales["hot"]
+        cache["cold"] = sales["cold"]
         cache["hourly"] = fetch_hourly()
         cache["bookings"] = fetch_bookings()
         last_update = time.time()
-    return jsonify({"hot": cache["hot"], "cold": cache["cold"], "hourly": cache["hourly"], "bookings": cache["bookings"]})
+    return jsonify(cache)
 
 
 @app.route("/")
@@ -141,36 +199,31 @@ def index():
         <style>
             body { font-family: Inter, Arial, sans-serif; background: #111; color: #eee; text-align: center; margin: 0; }
             h2 { font-size: 28px; margin: 10px 0; }
-            .grid { display: grid; grid-template-columns: 1fr 1fr 1fr; gap: 20px; padding: 20px; }
-            .block { padding: 15px; border-radius: 12px; box-shadow: 0 0 15px rgba(0,0,0,0.6); }
-            .hot { border: 3px solid #ff6600; }
-            .cold { border: 3px solid #0099ff; }
-            .bookings { border: 3px solid #00cc44; }
-            .chart { border: 3px solid orange; grid-column: span 3; }
-            table { width: 100%; border-collapse: collapse; }
-            td { padding: 6px 10px; font-size: 18px; text-align: left; }
-            .logo { position: fixed; bottom: 10px; right: 20px; font-size: 24px; font-weight: bold; color: white; font-family: Inter, Arial, sans-serif; }
+            .grid { display: flex; justify-content: center; gap: 20px; margin: 20px; }
+            .block { flex: 1; min-width: 300px; padding: 10px; border-radius: 10px; background: #1a1a1a; }
+            table { width: 100%; font-size: 18px; border-collapse: collapse; margin-top: 10px; }
+            td { padding: 4px 8px; text-align: left; }
+            .logo { position: fixed; right: 20px; bottom: 10px; font-size: 20px; font-weight: bold; color: white; font-family: Inter, sans-serif; }
         </style>
     </head>
     <body>
         <div class="grid">
-            <div class="block hot">
-                <h2>🔥 Гарячий Цех</h2>
+            <div class="block">
+                <h2>🔥 Гарячий цех</h2>
                 <table id="hot_table"></table>
             </div>
-            <div class="block cold">
-                <h2>❄️ Холодний Цех</h2>
+            <div class="block">
+                <h2>❄️ Холодний цех</h2>
                 <table id="cold_table"></table>
             </div>
-            <div class="block bookings">
-                <h2>📖 Бронювання</h2>
-                <p id="bookings_total" style="font-size:22px; font-weight:bold;"></p>
-                <div id="bookings_list"></div>
+            <div class="block">
+                <h2>📅 Бронювання</h2>
+                <table id="bookings"></table>
             </div>
-            <div class="block chart">
-                <h2>📊 Діаграма</h2>
-                <canvas id="salesChart" height="120"></canvas>
-            </div>
+        </div>
+        <div class="block" style="margin:20px;">
+            <h2>📊 Замовлення по годинах</h2>
+            <canvas id="hourlyChart" height="100"></canvas>
         </div>
         <div class="logo">GRECO</div>
 
@@ -180,37 +233,34 @@ def index():
                 const res = await fetch('/api/sales');
                 const data = await res.json();
 
-                let hotHTML = "";
-                for (let [name, count] of Object.entries(data.hot)) {
-                    hotHTML += `<tr><td>${name}</td><td style="text-align:right;">${count}</td></tr>`;
+                function fillTable(elemId, obj) {
+                    let html = "";
+                    for (const [k,v] of Object.entries(obj)) {
+                        html += `<tr><td>${k}</td><td style="text-align:right;">${v}</td></tr>`;
+                    }
+                    document.getElementById(elemId).innerHTML = html;
                 }
-                document.getElementById('hot_table').innerHTML = hotHTML;
+                fillTable("hot_table", data.hot);
+                fillTable("cold_table", data.cold);
 
-                let coldHTML = "";
-                for (let [name, count] of Object.entries(data.cold)) {
-                    coldHTML += `<tr><td>${name}</td><td style="text-align:right;">${count}</td></tr>`;
-                }
-                document.getElementById('cold_table').innerHTML = coldHTML;
-
-                document.getElementById('bookings_total').innerText = "Загальна кількість: " + data.bookings.total;
-                let blist = "";
-                data.bookings.bookings.forEach(b => {
-                    blist += `<div>${b.customer?.name || "Клієнт"} — ${b.personCount} гостей о ${b.dateTime}</div>`;
+                let bhtml = "";
+                data.bookings.forEach(b => {
+                    bhtml += `<tr><td>${b.name}</td><td>${b.time}</td><td>${b.guests} гостей</td></tr>`;
                 });
-                document.getElementById('bookings_list').innerHTML = blist;
+                document.getElementById("bookings").innerHTML = bhtml;
 
-                const ctx = document.getElementById('salesChart').getContext('2d');
-                if (window.salesChart) window.salesChart.destroy();
-                window.salesChart = new Chart(ctx, {
+                const ctx = document.getElementById('hourlyChart').getContext('2d');
+                if (window.hourlyChart) window.hourlyChart.destroy();
+                window.hourlyChart = new Chart(ctx, {
                     type: 'line',
                     data: {
                         labels: data.hourly.labels,
                         datasets: [
-                            { label: 'Гарячий цех', data: data.hourly.hot, borderColor: 'orange', backgroundColor: 'orange', fill: false },
-                            { label: 'Холодний цех', data: data.hourly.cold, borderColor: 'skyblue', backgroundColor: 'skyblue', fill: false }
+                            { label: 'Гарячий цех', data: data.hourly.hot, borderColor: 'orange', fill: false },
+                            { label: 'Холодний цех', data: data.hourly.cold, borderColor: 'skyblue', fill: false }
                         ]
                     },
-                    options: { responsive: true, plugins: { legend: { labels: { color: '#fff' } } }, scales: { x: { ticks: { color: '#fff' } }, y: { ticks: { color: '#fff' } } } }
+                    options: { responsive: true, plugins: { legend: { labels: { color: 'white' } } }, scales: { x: { ticks: { color: 'white' } }, y: { ticks: { color: 'white' } } } }
                 });
 
             } catch (e) {
