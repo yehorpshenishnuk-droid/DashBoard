@@ -14,8 +14,8 @@ app = Flask(__name__)
 # ======================
 # Токены и настройки
 # ======================
-POSTER_TOKEN = os.getenv("POSTER_TOKEN")  # Токен Poster (обязательно)
-ACCOUNT_NAME = "poka-net3"                # subdomain в Poster/Choice
+POSTER_TOKEN = os.getenv("POSTER_TOKEN")
+ACCOUNT_NAME = "poka-net3"
 CHOICE_TOKEN = os.getenv("CHOICE_TOKEN", "VlFmffA-HWXnYEm-cOXRIze-FDeVdAw")
 
 # ======================
@@ -25,8 +25,8 @@ HOT_CATEGORIES = {
     4:  "Чебуреки/Янтики",   # ЧЕБУРЕКИ
     15: "Чебуреки/Янтики",   # ЯНТИКИ
     33: "Піде",              # ПИДЕ
-    13: "М'ясні страви",     # МЯСНІ СТРАВИ
-    46: "Гарячі страви",     # ГОРЯЧІ СТРАВИ
+    13: "М'ясні страви",
+    46: "Гарячі страви",
 }
 
 COLD_CATEGORIES = {
@@ -43,7 +43,7 @@ COLD_CATEGORIES = {
 }
 
 cache = {"hot": {}, "cold": {}, "bookings": {}}
-TTL_SECONDS = 30  # кэш 30 сек
+TTL_SECONDS = 30
 
 
 # ======================
@@ -57,7 +57,7 @@ def fetch_sales(category_map):
     )
 
     resp = requests.get(url, timeout=20)
-    print("DEBUG Poster API:", resp.text[:500], file=sys.stderr, flush=True)
+    print("DEBUG Poster API:", resp.text[:300], file=sys.stderr, flush=True)
 
     try:
         data = resp.json().get("response", [])
@@ -76,7 +76,8 @@ def fetch_sales(category_map):
             counts[label] = counts.get(label, 0) + qty
             total += qty
 
-    items = sorted(counts.items(), key=lambda x: x[1], reverse=True)[:3]
+    # теперь берём все категории, не только топ-3
+    items = sorted(counts.items(), key=lambda x: x[1], reverse=True)
     return {"total": total, "items": items}
 
 
