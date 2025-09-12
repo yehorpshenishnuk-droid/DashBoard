@@ -40,7 +40,7 @@ COLD_CATEGORIES = {
 }
 
 last_update = 0
-cache = {"hot": {}, "cold": {}, "bookings": {}}
+cache = {"hot": {}, "cold": {}, "bookings": {}, "categories": {}}
 
 
 # ======================
@@ -55,7 +55,7 @@ def fetch_sales(group_mode=True):
     )
 
     resp = requests.get(url)
-    print("DEBUG Poster API response:", resp.text[:200], file=sys.stderr, flush=True)
+    print("DEBUG Poster API response:", resp.text[:500], file=sys.stderr, flush=True)
 
     try:
         data = resp.json().get("response", [])
@@ -70,11 +70,10 @@ def fetch_sales(group_mode=True):
         quantity = int(float(item.get("count", 0)))
         cat_id = item.get("menu_category_id")
 
-        if not isinstance(cat_id, int):
-            try:
-                cat_id = int(cat_id)
-            except:
-                continue
+        try:
+            cat_id = int(cat_id)
+        except:
+            continue
 
         if group_mode and cat_id in HOT_CATEGORIES:
             key = HOT_CATEGORIES[cat_id]
@@ -87,6 +86,21 @@ def fetch_sales(group_mode=True):
 
     top3 = sorted(sales_count.items(), key=lambda x: x[1], reverse=True)[:3]
     return {"total": total_orders, "items": top3}
+
+
+def fetch_categories():
+    """Получаем список категорий из Poster API"""
+    url = f"https://{ACCOUNT_NAME}.joinposter.com/api/menu.getCategories?token={POSTER_TOKEN}"
+    resp = requests.get(url)
+    print("DEBUG menu.getCategories:", resp.text[:500], file=sys.stderr, flush=True)
+
+    try:
+        data = resp.json().get("response", [])
+    except Exception as e:
+        print("ERROR menu.getCategories:", e, file=sys.stderr, flush=True)
+        return []
+
+    return [{"id": int(c["category_id"]), "name": c["category_name"]} for c in data]
 
 
 # ======================
@@ -147,6 +161,12 @@ def api_cold():
 def api_bookings():
     cache["bookings"] = fetch_bookings()
     return jsonify(cache["bookings"])
+
+
+@app.route("/api/categories")
+def api_categories():
+    cache["categories"] = fetch_categories()
+    return jsonify(cache["categories"])
 
 
 # ======================
