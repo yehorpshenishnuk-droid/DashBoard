@@ -2,16 +2,18 @@ import os
 import time
 import requests
 import sys
-from datetime import date
+from datetime import date, datetime
 from flask import Flask, render_template_string, jsonify
 
 app = Flask(__name__)
 
+# Tokens
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")
+CHOICE_TOKEN = os.getenv("CHOICE_TOKEN", "VlFmffA-HWXnYEm-cOXRIze-FDeVdAw")  # твой токен Choice
 ACCOUNT_NAME = "poka-net3"
 
 # ======================
-# Группы Чебуреків
+# Группы Чебуреків / Янтиків
 # ======================
 CHEBUREK_GROUPS = {
     "Чебуреки": [
@@ -25,9 +27,6 @@ CHEBUREK_GROUPS = {
     ]
 }
 
-# ======================
-# Группы Янтиків
-# ======================
 YANTYK_GROUPS = {
     "Янтики": [
         "Янтик з томатами та грибами",
@@ -135,11 +134,12 @@ COLD_DISHES = {
 GROUPS = {**CHEBUREK_GROUPS, **YANTYK_GROUPS, **PIDE_GROUP}
 
 last_update = 0
-cache = {"hot": {}, "cold": {}}
+cache = {"hot": {}, "cold": {}, "bookings": {}}
 
-
+# ======================
+# Poster API
+# ======================
 def fetch_sales(group_mode=True):
-    """Получаем продажи из Poster API за текущий день"""
     today = date.today().strftime("%Y-%m-%d")
     url = (
         f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getProductsSales"
@@ -161,8 +161,7 @@ def fetch_sales(group_mode=True):
         quantity = int(float(item.get("count", 0)))
         product_id = int(item.get("product_id", 0))
 
-        if group_mode:  # Горячий цех
-            # Проверяем группы
+        if group_mode:  # Гарячий цех
             for main_name, variants in GROUPS.items():
                 if name in variants:
                     key = "Чебуреки/Янтики" if main_name in ["Чебуреки", "Янтики"] else main_name
@@ -170,32 +169,56 @@ def fetch_sales(group_mode=True):
                     total_orders += quantity
                     break
             else:
-                # Проверяем HOT_DISHES
                 if product_id in HOT_DISHES:
                     sales_count[HOT_DISHES[product_id]] = sales_count.get(
                         HOT_DISHES[product_id], 0
                     ) + quantity
                     total_orders += quantity
-        else:  # Холодный цех
+        else:  # Холодний цех
             if product_id in COLD_DISHES:
                 sales_count[COLD_DISHES[product_id]] = sales_count.get(
                     COLD_DISHES[product_id], 0
                 ) + quantity
                 total_orders += quantity
 
-    # Берем топ-3 без "ТОП"
     top = sorted(sales_count.items(), key=lambda x: x[1], reverse=True)[:3]
-
     return {"total": total_orders, "top": [(i, c) for i, c in top]}
 
+# ======================
+# Choice API (бронювання)
+# ======================
+def fetch_bookings():
+    url = "https://api.choiceqr.com/bookings/list"
+    headers = {"Authorization": f"Bearer {CHOICE_TOKEN}"}
+    params = {"perPage": 5, "periodField": "bookingDt"}
+    try:
+        resp = requests.get(url, headers=headers, params=params)
+        data = resp.json().get("items", [])
+    except Exception as e:
+        print("ERROR Choice API:", e, file=sys.stderr, flush=True)
+        return []
 
+    bookings = []
+    for b in data:
+        name = b.get("customer", {}).get("name", "—")
+        dt_raw = b.get("dateTime")
+        try:
+            dt = datetime.fromisoformat(dt_raw.replace("Z", "+00:00")).strftime("%Y-%m-%d %H:%M")
+        except:
+            dt = dt_raw
+        guests = b.get("personCount", 0)
+        bookings.append({"name": name, "time": dt, "guests": guests})
+    return bookings
+
+# ======================
+# API endpoints
+# ======================
 @app.route("/api/hot")
 def api_hot():
     global last_update, cache
     if time.time() - last_update > 30:
         cache["hot"] = fetch_sales(group_mode=True)
     return jsonify(cache["hot"])
-
 
 @app.route("/api/cold")
 def api_cold():
@@ -205,7 +228,14 @@ def api_cold():
         last_update = time.time()
     return jsonify(cache["cold"])
 
+@app.route("/api/bookings")
+def api_bookings():
+    cache["bookings"] = fetch_bookings()
+    return jsonify(cache["bookings"])
 
+# ======================
+# UI
+# ======================
 @app.route("/")
 def index():
     template = """
@@ -214,13 +244,14 @@ def index():
         <style>
             body { font-family: Arial, sans-serif; background: #111; color: #eee; text-align: center; }
             h2 { font-size: 40px; margin-bottom: 20px; }
-            .grid { display: flex; justify-content: center; gap: 50px; max-width: 1400px; margin: auto; }
-            .block { width: 650px; padding: 30px; border-radius: 15px; box-shadow: 0 0 20px rgba(0,0,0,0.7); animation: fadeIn 1s; }
+            .grid { display: flex; justify-content: center; gap: 50px; max-width: 1600px; margin: auto; flex-wrap: wrap; }
+            .block { width: 480px; padding: 25px; border-radius: 15px; box-shadow: 0 0 20px rgba(0,0,0,0.7); animation: fadeIn 1s; }
             .hot { border: 4px solid #ff6600; }
             .cold { border: 4px solid #0099ff; }
-            .item { font-size: 28px; margin: 8px 0; }
-            .total { margin-top: 40px; font-size: 34px; font-weight: bold; }
-            .updated { margin-top: 10px; font-size: 18px; color: #aaa; }
+            .bookings { border: 4px solid #33cc33; }
+            .item { font-size: 24px; margin: 6px 0; }
+            .total { margin-top: 20px; font-size: 28px; font-weight: bold; }
+            .updated { margin-top: 10px; font-size: 16px; color: #aaa; }
             @keyframes fadeIn { from {opacity: 0;} to {opacity: 1;} }
         </style>
     </head>
@@ -228,13 +259,17 @@ def index():
         <div class="grid">
             <div class="block hot">
                 <h2>🔥 Гарячий ЦЕХ</h2>
-                <p id="hot_total" style="font-size:32px; font-weight:bold;">Всього: ...</p>
+                <p id="hot_total">Всього: ...</p>
                 <div id="hot_top">Загрузка...</div>
             </div>
             <div class="block cold">
                 <h2>❄️ Холодний ЦЕХ</h2>
-                <p id="cold_total" style="font-size:32px; font-weight:bold;">Всього: ...</p>
+                <p id="cold_total">Всього: ...</p>
                 <div id="cold_top">Загрузка...</div>
+            </div>
+            <div class="block bookings">
+                <h2>📖 Бронювання</h2>
+                <div id="bookings_list">Загрузка...</div>
             </div>
         </div>
         <div class="total" id="all_total">Загальна кількість замовлень: ...</div>
@@ -261,6 +296,14 @@ def index():
                     coldDiv.innerHTML += `<div class="item">${index+1}) ${item[0]} — ${item[1]} шт.</div>`;
                 });
 
+                const bookingsRes = await fetch('/api/bookings');
+                const bookings = await bookingsRes.json();
+                let bookingsDiv = document.getElementById('bookings_list');
+                bookingsDiv.innerHTML = "";
+                bookings.forEach((b, index) => {
+                    bookingsDiv.innerHTML += `<div class="item">${index+1}) Ім'я: ${b.name}<br/>Час: ${b.time}<br/>Гості: ${b.guests}</div><hr/>`;
+                });
+
                 const all = hot.total + cold.total;
                 const totalDiv = document.getElementById('all_total');
                 totalDiv.innerText = "Загальна кількість замовлень: " + all;
@@ -280,7 +323,6 @@ def index():
     </html>
     """
     return render_template_string(template)
-
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
