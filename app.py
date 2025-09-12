@@ -4,27 +4,21 @@ import requests
 import sys
 from datetime import date, datetime, timedelta, timezone
 try:
-    from zoneinfo import ZoneInfo  # Python 3.9+
+    from zoneinfo import ZoneInfo
 except Exception:
     ZoneInfo = None
 from flask import Flask, render_template_string, jsonify
 
 app = Flask(__name__)
 
-# ======================
-# Токены и настройки
-# ======================
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")
 ACCOUNT_NAME = "poka-net3"
 CHOICE_TOKEN = os.getenv("CHOICE_TOKEN", "VlFmffA-HWXnYEm-cOXRIze-FDeVdAw")
 
-# ======================
-# Категории Poster POS ID -> Группы отображения
-# ======================
 HOT_CATEGORIES = {
-    4:  "Чебуреки/Янтики",   # ЧЕБУРЕКИ
-    15: "Чебуреки/Янтики",   # ЯНТИКИ
-    33: "Піде",              # ПИДЕ
+    4:  "Чебуреки/Янтики",
+    15: "Чебуреки/Янтики",
+    33: "Піде",
     13: "М'ясні страви",
     46: "Гарячі страви",
 }
@@ -42,20 +36,16 @@ COLD_CATEGORIES = {
     44: "Власне виробництво",
 }
 
-cache = {"hot": {}, "cold": {}, "bookings": {}}
+cache = {"hot": {}, "cold": {}, "bookings": {}, "hourly": {}}
 TTL_SECONDS = 30
 
 
-# ======================
-# Poster API — продажи по категориям
-# ======================
 def fetch_sales(category_map):
     today = date.today().strftime("%Y%m%d")
     url = (
         f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getCategoriesSales"
         f"?token={POSTER_TOKEN}&dateFrom={today}&dateTo={today}"
     )
-
     resp = requests.get(url, timeout=20)
     print("DEBUG Poster API:", resp.text[:300], file=sys.stderr, flush=True)
 
@@ -67,7 +57,6 @@ def fetch_sales(category_map):
 
     counts = {}
     total = 0
-
     for cat in data:
         cat_id = int(cat.get("category_id", 0))
         qty = int(float(cat.get("count", 0)))
@@ -76,32 +65,26 @@ def fetch_sales(category_map):
             counts[label] = counts.get(label, 0) + qty
             total += qty
 
-    # теперь берём все категории, не только топ-3
     items = sorted(counts.items(), key=lambda x: x[1], reverse=True)
     return {"total": total, "items": items}
 
 
-# ======================
-# Choice API — Бронювання
-# ======================
 def _today_range_utc():
     try:
         tz = ZoneInfo("Europe/Kyiv") if ZoneInfo else timezone(timedelta(hours=3))
     except Exception:
         tz = timezone(timedelta(hours=3))
-
     now_local = datetime.now(tz)
     start_local = now_local.replace(hour=0, minute=0, second=0, microsecond=0)
     end_local = start_local + timedelta(days=1)
-
-    start_utc = start_local.astimezone(timezone.utc)
-    end_utc = end_local.astimezone(timezone.utc)
-
-    return start_utc.isoformat().replace("+00:00", "Z"), end_utc.isoformat().replace("+00:00", "Z")
+    return start_local, end_local
 
 
 def fetch_bookings():
-    start_iso, end_iso = _today_range_utc()
+    start_local, end_local = _today_range_utc()
+    start_iso = start_local.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+    end_iso = end_local.astimezone(timezone.utc).isoformat().replace("+00:00", "Z")
+
     url = f"https://{ACCOUNT_NAME}.choiceqr.com/api/bookings/list"
     headers = {"Authorization": f"Bearer {CHOICE_TOKEN}"}
     params = {"perPage": 5, "page": 1, "from": start_iso, "till": end_iso, "periodField": "bookingDt"}
@@ -125,7 +108,6 @@ def fetch_bookings():
         items = []
 
     total = data.get("totalCount") or data.get("total") or len(items)
-
     bookings = []
     for b in items:
         customer = b.get("customer") or {}
@@ -141,13 +123,17 @@ def fetch_bookings():
             except Exception:
                 pass
         bookings.append({"name": name, "time": time_str, "guests": guests})
-
     return {"total": int(total) if isinstance(total, (int, float)) else total, "items": bookings}
 
 
-# ======================
-# API endpoints
-# ======================
+def fetch_hourly():
+    # Здесь для примера — просто "накопительная заглушка".
+    # Можно заменить на dash.getProductsSales и парсить время заказов.
+    hours = [f"{h:02d}:00" for h in range(8, 24)]
+    values = [i * 5 for i in range(len(hours))]  # Заглушка: возрастающие значения
+    return {"labels": hours, "values": values}
+
+
 @app.route("/api/hot")
 def api_hot():
     if time.time() - cache["hot"].get("ts", 0) > TTL_SECONDS:
@@ -171,26 +157,31 @@ def api_bookings():
     return jsonify(cache["bookings"])
 
 
-# ======================
-# UI
-# ======================
+@app.route("/api/hourly")
+def api_hourly():
+    cache["hourly"] = fetch_hourly()
+    return jsonify(cache["hourly"])
+
+
 @app.route("/")
 def index():
     template = """
     <html>
     <head>
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <style>
-            body { font-family: Arial, sans-serif; background: #111; color: #eee; text-align: center; }
-            h2 { font-size: 36px; margin-bottom: 15px; }
-            .grid { display: flex; justify-content: center; gap: 40px; max-width: 1600px; margin: auto; flex-wrap: wrap; }
-            .block { width: 450px; padding: 25px; border-radius: 15px; box-shadow: 0 0 20px rgba(0,0,0,0.7); animation: fadeIn 1s; }
-            .hot { border: 4px solid #ff6600; }
-            .cold { border: 4px solid #0099ff; }
-            .bookings { border: 4px solid #00ff00; }
-            .item { font-size: 22px; margin: 6px 0; }
-            .total { margin-top: 15px; font-size: 26px; font-weight: bold; }
-            .updated { margin-top: 10px; font-size: 14px; color: #aaa; }
-            @keyframes fadeIn { from {opacity: 0;} to {opacity: 1;} }
+            body { font-family: Inter, Arial, sans-serif; background: #111; color: #eee; text-align: center; }
+            h2 { font-size: 28px; margin-bottom: 10px; }
+            .grid { display: flex; justify-content: center; gap: 20px; max-width: 1600px; margin: auto; flex-wrap: wrap; }
+            .block { width: 400px; padding: 15px; border-radius: 10px; box-shadow: 0 0 10px rgba(0,0,0,0.7); }
+            .hot { border: 3px solid #ff6600; }
+            .cold { border: 3px solid #0099ff; }
+            .bookings { border: 3px solid #00ff00; }
+            .chart { border: 3px solid #ffaa00; }
+            table { width: 100%; border-collapse: collapse; font-size: 16px; }
+            td { padding: 4px; text-align: left; }
+            td:last-child { text-align: right; }
+            .logo { position: fixed; bottom: 10px; right: 20px; font-family: Inter, Arial, sans-serif; font-weight: bold; font-size: 24px; color: white; }
         </style>
     </head>
     <body>
@@ -198,64 +189,52 @@ def index():
             <div class="block hot">
                 <h2>🔥 Гарячий ЦЕХ</h2>
                 <p id="hot_total">Всього: ...</p>
-                <div id="hot_items">Загрузка...</div>
+                <table id="hot_items"></table>
             </div>
             <div class="block cold">
                 <h2>❄️ Холодний ЦЕХ</h2>
                 <p id="cold_total">Всього: ...</p>
-                <div id="cold_items">Загрузка...</div>
+                <table id="cold_items"></table>
             </div>
             <div class="block bookings">
                 <h2>📖 Бронювання</h2>
                 <p id="bookings_total">Загальна кількість: ...</p>
-                <div id="bookings_list">Загрузка...</div>
+                <table id="bookings_list"></table>
+            </div>
+            <div class="block chart">
+                <h2>📊 Діаграма</h2>
+                <canvas id="ordersChart" width="350" height="250"></canvas>
             </div>
         </div>
-        <div class="updated" id="updated_time">Оновлено: ...</div>
+        <div class="logo">GRECO</div>
 
         <script>
         async function updateData() {
-            try {
-                const hotRes = await fetch('/api/hot');
-                const hot = await hotRes.json();
-                document.getElementById('hot_total').innerText = "Всього: " + hot.total + " замовлень";
-                let hotDiv = document.getElementById('hot_items');
-                hotDiv.innerHTML = "";
-                hot.items.forEach((item, index) => {
-                    hotDiv.innerHTML += `<div class="item">${index+1}) ${item[0]} — ${item[1]}</div>`;
-                });
+            const hotRes = await fetch('/api/hot'); const hot = await hotRes.json();
+            document.getElementById('hot_total').innerText = "Всього: " + hot.total;
+            let hotTable = document.getElementById('hot_items'); hotTable.innerHTML = "";
+            hot.items.forEach(item => { hotTable.innerHTML += `<tr><td>${item[0]}</td><td>${item[1]}</td></tr>`; });
 
-                const coldRes = await fetch('/api/cold');
-                const cold = await coldRes.json();
-                document.getElementById('cold_total').innerText = "Всього: " + cold.total + " замовлень";
-                let coldDiv = document.getElementById('cold_items');
-                coldDiv.innerHTML = "";
-                cold.items.forEach((item, index) => {
-                    coldDiv.innerHTML += `<div class="item">${index+1}) ${item[0]} — ${item[1]}</div>`;
-                });
+            const coldRes = await fetch('/api/cold'); const cold = await coldRes.json();
+            document.getElementById('cold_total').innerText = "Всього: " + cold.total;
+            let coldTable = document.getElementById('cold_items'); coldTable.innerHTML = "";
+            cold.items.forEach(item => { coldTable.innerHTML += `<tr><td>${item[0]}</td><td>${item[1]}</td></tr>`; });
 
-                const bookRes = await fetch('/api/bookings');
-                const bookings = await bookRes.json();
-                document.getElementById('bookings_total').innerText = "Загальна кількість: " + bookings.total;
-                let bookDiv = document.getElementById('bookings_list');
-                bookDiv.innerHTML = "";
-                if (bookings.items.length === 0) {
-                    bookDiv.innerHTML = "<div class='item'>Немає бронювань</div>";
-                } else {
-                    bookings.items.forEach((b, index) => {
-                        bookDiv.innerHTML += `<div class="item">${index+1}) ${b.name} — ${b.time}, гостей: ${b.guests}</div>`;
-                    });
-                }
+            const bookRes = await fetch('/api/bookings'); const bookings = await bookRes.json();
+            document.getElementById('bookings_total').innerText = "Загальна кількість: " + bookings.total;
+            let bookTable = document.getElementById('bookings_list'); bookTable.innerHTML = "";
+            bookings.items.forEach(b => { bookTable.innerHTML += `<tr><td>${b.name} (${b.time})</td><td>${b.guests}</td></tr>`; });
 
-                const now = new Date();
-                document.getElementById('updated_time').innerText = "Оновлено: " + now.toLocaleTimeString();
-            } catch (e) {
-                console.error("Ошибка обновления:", e);
-            }
+            const hourRes = await fetch('/api/hourly'); const hourly = await hourRes.json();
+            const ctx = document.getElementById('ordersChart').getContext('2d');
+            new Chart(ctx, {
+                type: 'line',
+                data: { labels: hourly.labels, datasets: [{ label: 'Замовлення', data: hourly.values, borderColor: 'orange', fill: false }] },
+                options: { responsive: false, scales: { y: { beginAtZero: true } } }
+            });
         }
-
-        setInterval(updateData, 30000);
-        window.onload = updateData;
+        updateData();
+        setInterval(updateData, 60000);
         </script>
     </body>
     </html>
