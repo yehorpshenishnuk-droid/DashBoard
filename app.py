@@ -1,6 +1,5 @@
 import os
 import time
-import math
 import requests
 import sys
 from datetime import date, datetime, timedelta
@@ -25,14 +24,13 @@ CACHE_TS = 0
 
 # ===== Helpers =====
 def _get(url, **kwargs):
-    """GET с безопасным логом первых 1500 символов."""
     r = requests.get(url, timeout=kwargs.pop("timeout", 25))
     log_snippet = r.text[:1500].replace("\n", " ")
     print(f"DEBUG GET {url.split('?')[0]} -> {r.status_code} : {log_snippet}", file=sys.stderr, flush=True)
     r.raise_for_status()
     return r
 
-# ===== Справочник товаров (пагинация) =====
+# ===== Справочник товаров =====
 def load_products():
     global PRODUCT_CACHE, PRODUCT_CACHE_TS
     if PRODUCT_CACHE and time.time() - PRODUCT_CACHE_TS < 3600:
@@ -75,7 +73,7 @@ def load_products():
     print(f"DEBUG products cached: {len(PRODUCT_CACHE)} items", file=sys.stderr, flush=True)
     return PRODUCT_CACHE
 
-# ===== Сводные продажи по категориям =====
+# ===== Сводные продажи =====
 def fetch_category_sales():
     today = date.today().strftime("%Y-%m-%d")
     url = (
@@ -107,14 +105,14 @@ def fetch_category_sales():
     cold = dict(sorted(cold.items(), key=lambda x: x[1], reverse=True))
     return {"hot": hot, "cold": cold}
 
-# ===== Почасовая диаграмма: чеки + справочник =====
+# ===== Почасовая диаграмма =====
 def fetch_transactions_hourly(day_offset=0):
     products = load_products()
     target_date = (date.today() - timedelta(days=day_offset)).strftime("%Y-%m-%d")
 
     per_page = 500
     page = 1
-    hours = list(range(10, 23))   # от 10 до 22
+    hours = list(range(10, 23))   # фиксированный диапазон 10:00–22:00
     hot_by_hour = [0] * len(hours)
     cold_by_hour = [0] * len(hours)
 
@@ -240,24 +238,16 @@ def index():
         <style>
             :root {
                 --bg:#0f0f0f; --panel:#151515; --fg:#eee;
-                --hot:#ff8800; --cold:#33b5ff; --ok:#00d46a; --frame:#ffb000;
+                --hot:#ff8800; --cold:#33b5ff;
             }
             body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif}
             .wrap{padding:18px;max-width:1600px;margin:0 auto}
             .row{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
-            .card{
-                background:var(--panel);
-                border-radius:14px;
-                padding:14px 16px;
-                position:relative;
-                outline:3px solid rgba(255,255,255,0.04);
-                box-shadow:0 0 0 3px rgba(0,0,0,0) inset, 0 0 22px rgba(0,0,0,0.45);
-            }
-            .card.chart{grid-column:1/-1;outline-color:rgba(255,176,0,0.55);}
+            .card{background:var(--panel);border-radius:14px;padding:14px 16px;}
+            .card.chart{grid-column:1/-1;}
             table{width:100%;border-collapse:collapse;font-size:18px}
-            td{padding:4px 2px}
-            td:last-child{text-align:right}
-            .logo{position:fixed;right:18px;bottom:12px;font-weight:800;letter-spacing:0.5px}
+            td{padding:4px 2px} td:last-child{text-align:right}
+            .logo{position:fixed;right:18px;bottom:12px;font-weight:800}
         </style>
     </head>
     <body>
@@ -309,7 +299,7 @@ def index():
             chart = new Chart(ctx,{
                 type:'line',
                 data:{
-                    labels: today.labels,
+                    labels: data.hourly.labels, // ось X всегда 10–22
                     datasets:[
                         {label:'Гарячий', data:today.hot, borderColor:'#ff8800', backgroundColor:'#ff8800', tension:0.25, fill:false},
                         {label:'Холодний', data:today.cold, borderColor:'#33b5ff', backgroundColor:'#33b5ff', tension:0.25, fill:false},
@@ -320,7 +310,14 @@ def index():
                 options:{
                     responsive:true,
                     plugins:{legend:{labels:{color:'#ddd'}}},
-                    scales:{x:{ticks:{color:'#bbb'}}, y:{ticks:{color:'#bbb'}, beginAtZero:true}}
+                    scales:{
+                        x:{
+                            ticks:{color:'#bbb'},
+                            min:'10:00',
+                            max:'22:00'
+                        },
+                        y:{ticks:{color:'#bbb'}, beginAtZero:true}
+                    }
                 }
             });
         }
