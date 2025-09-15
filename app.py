@@ -73,15 +73,13 @@ def fetch_transactions_hourly():
         )
         try:
             resp = _get(url)
-            body = resp.json().get("response", {})
+            categories = resp.json().get("response", [])
         except Exception as e:
             print("ERROR analytics:", e, file=sys.stderr, flush=True)
             return [0]*24, [0]*24
 
-        # categories по часам
         hot_hours = [0]*24
         cold_hours = [0]*24
-        categories = body.get("categories", [])
         for cat in categories:
             try:
                 cid = int(cat.get("category_id", 0))
