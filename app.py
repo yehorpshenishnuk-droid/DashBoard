@@ -8,7 +8,7 @@ from flask import Flask, render_template_string, jsonify
 app = Flask(__name__)
 
 # ==== Конфиг ====
-ACCOUNT_NAME = "poka-net3"
+ACCOUNT_NAME = "poka-net3"  # для Poster
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
 CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # опционален (бронирования)
 
@@ -177,20 +177,25 @@ def fetch_transactions_hourly(day_offset=0):
 def fetch_bookings():
     if not CHOICE_TOKEN:
         return []
-    url = f"https://{ACCOUNT_NAME}.choiceqr.com/api/bookings/list"
+    url = "https://greco.choiceqr.com/api/bookings/list"
     headers = {"Authorization": f"Bearer {CHOICE_TOKEN}"}
     try:
         resp = requests.get(url, headers=headers, timeout=20)
         data = resp.json()
+        print("DEBUG Choice API response:", data, file=sys.stderr, flush=True)
     except Exception as e:
         print("ERROR Choice:", e, file=sys.stderr, flush=True)
         return []
 
     items = None
-    for key in ("items", "data", "list", "bookings", "response"):
-        v = data.get(key)
-        if isinstance(v, list):
-            items = v; break
+    if isinstance(data, list):
+        items = data
+    else:
+        for key in ("items", "data", "list", "bookings", "response"):
+            v = data.get(key)
+            if isinstance(v, list):
+                items = v
+                break
     if not items:
         return []
 
@@ -198,16 +203,16 @@ def fetch_bookings():
     for b in items[:12]:
         name = (b.get("customer") or {}).get("name") or b.get("name") or "—"
         guests = b.get("personCount") or b.get("persons") or b.get("guests") or "—"
-        time_str = b.get("dateTime") or b.get("bookingDt") or b.get("startDateTime") or ""
-        if isinstance(time_str, str) and len(time_str) >= 16:
+        time_val = b.get("dateTime") or b.get("bookingDt") or b.get("startDateTime") or ""
+        if isinstance(time_val, str) and len(time_val) >= 16:
             try:
-                time_str = datetime.fromisoformat(time_str.replace("Z","+00:00")).strftime("%H:%M")
+                time_val = datetime.fromisoformat(time_val.replace("Z","+00:00")).strftime("%H:%M")
             except Exception:
                 try:
-                    time_str = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
+                    time_val = datetime.strptime(time_val, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
                 except Exception:
                     pass
-        out.append({"name": name, "time": time_str or "—", "guests": guests})
+        out.append({"name": name, "time": time_val or "—", "guests": guests})
     return out
 
 # ===== API =====
@@ -291,15 +296,21 @@ def index():
             const b = document.getElementById('book_tbl');
             b.innerHTML = (data.bookings||[]).map(x => `<tr><td>${x.name}</td><td>${x.time}</td><td>${x.guests}</td></tr>`).join('') || "<tr><td>—</td><td></td><td></td></tr>";
 
+            // текущий день обрезаем
             let today = cutToNow(data.hourly.labels, data.hourly.hot, data.hourly.cold);
-            let prev = cutToNow(data.hourly_prev.labels, data.hourly_prev.hot, data.hourly_prev.cold);
+            // прошлую неделю показываем полностью
+            let prev = {
+                labels: data.hourly_prev.labels,
+                hot: data.hourly_prev.hot,
+                cold: data.hourly_prev.cold
+            };
 
             const ctx = document.getElementById('chart').getContext('2d');
             if(chart) chart.destroy();
             chart = new Chart(ctx,{
                 type:'line',
                 data:{
-                    labels: data.hourly.labels, // ось X всегда 10–22
+                    labels: data.hourly.labels, // полный диапазон 10–22
                     datasets:[
                         {label:'Гарячий', data:today.hot, borderColor:'#ff8800', backgroundColor:'#ff8800', tension:0.25, fill:false},
                         {label:'Холодний', data:today.cold, borderColor:'#33b5ff', backgroundColor:'#33b5ff', tension:0.25, fill:false},
