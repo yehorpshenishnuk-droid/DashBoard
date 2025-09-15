@@ -13,11 +13,11 @@ POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
 CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # опционален (бронирования)
 
 # Категории POS ID
-HOT_CATEGORIES  = {4, 13, 15, 46, 33}
+HOT_CATEGORIES  = {4, 13, 15, 46, 33}                 # ЧЕБУРЕКИ, М'ЯСНІ, ЯНТИКИ, ГАРЯЧІ, ПІДЕ
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 
 # Кэш
-PRODUCT_CACHE = {}
+PRODUCT_CACHE = {}           # product_id -> menu_category_id
 PRODUCT_CACHE_TS = 0
 CACHE = {"hot": {}, "cold": {}, "hourly": {}, "hourly_prev": {}, "bookings": []}
 CACHE_TS = 0
@@ -112,7 +112,7 @@ def fetch_transactions_hourly(day_offset=0):
 
     per_page = 500
     page = 1
-    hours = list(range(10, 23))   # фиксированный диапазон 10–22
+    hours = list(range(10, 23))   # фиксированный диапазон 10:00–22:00
     hot_by_hour = [0] * len(hours)
     cold_by_hour = [0] * len(hours)
 
@@ -176,40 +176,29 @@ def fetch_transactions_hourly(day_offset=0):
 # ===== Бронирования =====
 def fetch_bookings():
     if not CHOICE_TOKEN:
-        print("DEBUG: CHOICE_TOKEN not set", file=sys.stderr, flush=True)
         return []
-
-    url = "https://greco.choiceqr.com/api/bookings/list"
+    url = f"https://{ACCOUNT_NAME}.choiceqr.com/api/bookings/list"
     headers = {"Authorization": f"Bearer {CHOICE_TOKEN}"}
     try:
         resp = requests.get(url, headers=headers, timeout=20)
         data = resp.json()
-        print("DEBUG Choice API response:", data, file=sys.stderr, flush=True)
     except Exception as e:
         print("ERROR Choice:", e, file=sys.stderr, flush=True)
         return []
 
-    if isinstance(data, list):
-        items = data
-    else:
-        items = []
-        for key in ("items", "data", "list", "bookings", "response"):
-            v = data.get(key)
-            if isinstance(v, list):
-                items = v
-                break
+    items = None
+    for key in ("items", "data", "list", "bookings", "response"):
+        v = data.get(key)
+        if isinstance(v, list):
+            items = v; break
+    if not items:
+        return []
 
     out = []
     for b in items[:12]:
         name = (b.get("customer") or {}).get("name") or b.get("name") or "—"
         guests = b.get("personCount") or b.get("persons") or b.get("guests") or "—"
-
-        time_val = b.get("dateTime")
-        if isinstance(time_val, dict):
-            time_str = next(iter(time_val.values()), "")
-        else:
-            time_str = str(time_val or "")
-
+        time_str = b.get("dateTime") or b.get("bookingDt") or b.get("startDateTime") or ""
         if isinstance(time_str, str) and len(time_str) >= 16:
             try:
                 time_str = datetime.fromisoformat(time_str.replace("Z","+00:00")).strftime("%H:%M")
@@ -218,7 +207,6 @@ def fetch_bookings():
                     time_str = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
                 except Exception:
                     pass
-
         out.append({"name": name, "time": time_str or "—", "guests": guests})
     return out
 
@@ -242,11 +230,25 @@ def api_sales():
 # ===== UI =====
 @app.route("/")
 def index():
-    template = """<!DOCTYPE html>
+    template = """
     <html>
     <head>
         <meta charset="utf-8" />
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <style>
+            :root {
+                --bg:#0f0f0f; --panel:#151515; --fg:#eee;
+                --hot:#ff8800; --cold:#33b5ff;
+            }
+            body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif}
+            .wrap{padding:18px;max-width:1600px;margin:0 auto}
+            .row{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+            .card{background:var(--panel);border-radius:14px;padding:14px 16px;}
+            .card.chart{grid-column:1/-1;}
+            table{width:100%;border-collapse:collapse;font-size:18px}
+            td{padding:4px 2px} td:last-child{text-align:right}
+            .logo{position:fixed;right:18px;bottom:12px;font-weight:800}
+        </style>
     </head>
     <body>
         <div class="wrap">
@@ -257,6 +259,7 @@ def index():
                 <div class="card chart"><h2>📊 Замовлення по годинах (накопич.)</h2><canvas id="chart" height="160"></canvas></div>
             </div>
         </div>
+        <div class="logo">GRECO</div>
 
         <script>
         let chart;
@@ -296,19 +299,24 @@ def index():
             chart = new Chart(ctx,{
                 type:'line',
                 data:{
-                    labels: data.hourly.labels,
+                    labels: data.hourly.labels, // ось X всегда 10–22
                     datasets:[
-                        {label:'Гарячий', data:today.hot, borderColor:'#ff8800', tension:0.25, fill:false},
-                        {label:'Холодний', data:today.cold, borderColor:'#33b5ff', tension:0.25, fill:false},
+                        {label:'Гарячий', data:today.hot, borderColor:'#ff8800', backgroundColor:'#ff8800', tension:0.25, fill:false},
+                        {label:'Холодний', data:today.cold, borderColor:'#33b5ff', backgroundColor:'#33b5ff', tension:0.25, fill:false},
                         {label:'Гарячий (мин. тижд.)', data:prev.hot, borderColor:'#ff8800', borderDash:[6,4], tension:0.25, fill:false},
                         {label:'Холодний (мин. тижд.)', data:prev.cold, borderColor:'#33b5ff', borderDash:[6,4], tension:0.25, fill:false}
                     ]
                 },
                 options:{
                     responsive:true,
+                    plugins:{legend:{labels:{color:'#ddd'}}},
                     scales:{
-                        x:{min:'10:00', max:'22:00'},
-                        y:{beginAtZero:true}
+                        x:{
+                            ticks:{color:'#bbb'},
+                            min:'10:00',
+                            max:'22:00'
+                        },
+                        y:{ticks:{color:'#bbb'}, beginAtZero:true}
                     }
                 }
             });
@@ -316,7 +324,8 @@ def index():
         refresh(); setInterval(refresh, 60000);
         </script>
     </body>
-    </html>"""
+    </html>
+    """
     return render_template_string(template)
 
 if __name__ == "__main__":
