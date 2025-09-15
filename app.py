@@ -11,7 +11,7 @@ app = Flask(__name__)
 ACCOUNT_NAME = "poka-net3"
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
 CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # опционален (бронирования)
-TZ_OFFSET = int(os.getenv("TZ_OFFSET", "3"))       # сдвиг времени (Киев = +3)
+TZ_OFFSET = int(os.getenv("TZ_OFFSET", "3"))       # Киев по умолчанию +3
 
 # Категории POS ID
 HOT_CATEGORIES  = {4, 13, 15, 46, 33}
@@ -139,11 +139,10 @@ def fetch_transactions_hourly():
                 dt_str = trx.get("date_close")
                 try:
                     dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-                    dt = dt + timedelta(hours=TZ_OFFSET)   # <<< смещение по Киеву
+                    dt = dt + timedelta(hours=TZ_OFFSET)   # смещение Киев
                     hour = dt.hour
                     if hour not in hours:
                         continue
-                    idx = hours.index(hour)
                 except Exception:
                     continue
 
@@ -154,24 +153,20 @@ def fetch_transactions_hourly():
                     except Exception:
                         continue
                     cid = products.get(pid, 0)
-                    if cid in HOT_CATEGORIES:
-                        hot_by_hour[idx] += qty
-                    elif cid in COLD_CATEGORIES:
-                        cold_by_hour[idx] += qty
+                    # <<< накопительно: добавляем во ВСЕ часы до закрытия
+                    for h in hours:
+                        if h <= hour:
+                            idx = hours.index(h)
+                            if cid in HOT_CATEGORIES:
+                                hot_by_hour[idx] += qty
+                            elif cid in COLD_CATEGORIES:
+                                cold_by_hour[idx] += qty
 
             if per_page_resp * page >= total:
                 break
             page += 1
 
-        # накопительно
-        hot_cum, cold_cum = [], []
-        th, tc = 0, 0
-        for h, c in zip(hot_by_hour, cold_by_hour):
-            th += h; tc += c
-            hot_cum.append(th)
-            cold_cum.append(tc)
-
-        return hot_cum, cold_cum
+        return hot_by_hour, cold_by_hour
 
     hot_today, cold_today = collect_for_day(today.strftime("%Y-%m-%d"))
     hot_prev, cold_prev = collect_for_day(last_week.strftime("%Y-%m-%d"))
