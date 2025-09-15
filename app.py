@@ -1,149 +1,346 @@
 import os
+import time
 import requests
-import datetime
-import pytz
-import dash
-from dash import dcc, html
-from dash.dependencies import Output, Input
-import plotly.graph_objs as go
+import sys
+from datetime import date, datetime, timedelta
+from flask import Flask, render_template_string, jsonify
 
-# =============== НАСТРОЙКИ ===============
-POSTER_TOKEN = os.getenv("POSTER_TOKEN", "ВАШ_ТОКЕН")
-POSTER_API = "https://poka-net3.joinposter.com/api"
-CHOICE_API = "https://poka-net3.choiceqr.com/api"
+app = Flask(__name__)
 
-LOCAL_TZ = pytz.timezone("Europe/Kiev")  # Измени на Europe/Sofia если нужно
-# ========================================
+# ==== Конфиг ====
+ACCOUNT_NAME = "poka-net3"
+POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
+CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # опционален (бронирования)
+TZ_OFFSET = int(os.getenv("TZ_OFFSET", "3"))       # сдвиг времени (Киев = +3)
 
-# Категории горячего и холодного цеха
-HOT_CATEGORIES = {"4": "ЧЕБУРЕКИ", "13": "МЯСНІ СТРАВИ", "15": "ЯНТИКИ", "46": "ГОРЯЧІ СТРАВИ", "33": "ПИДЕ"}
-COLD_CATEGORIES = {"7": "МАНТЫ", "8": "ДЕРУНИ", "11": "САЛАТИ", "16": "СУПИ", "18": "МЛИНЦІ та СИРНИКИ",
-                   "19": "ЗАКУСКИ", "29": "ПІСНЕ МЕНЮ", "32": "ДЕСЕРТИ", "36": "СНІДАНКИ", "44": "Власне виробництво"}
+# Категории POS ID
+HOT_CATEGORIES  = {4, 13, 15, 46, 33}
+COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 
-
-def fetch_categories_sales(date_from, date_to):
-    url = f"{POSTER_API}/dash.getCategoriesSales?token={POSTER_TOKEN}&dateFrom={date_from}&dateTo={date_to}"
-    r = requests.get(url)
-    return r.json().get("response", [])
+# Кэш
+PRODUCT_CACHE = {}
+PRODUCT_CACHE_TS = 0
+CACHE = {"hot": {}, "cold": {}, "hourly": {}, "bookings": []}
+CACHE_TS = 0
 
 
-def fetch_transactions(date_from, date_to):
-    url = f"{POSTER_API}/transactions.getTransactions?token={POSTER_TOKEN}&date_from={date_from}&date_to={date_to}&per_page=500"
-    r = requests.get(url)
-    return r.json().get("response", {}).get("data", [])
+# ===== Helpers =====
+def _get(url, **kwargs):
+    r = requests.get(url, timeout=kwargs.pop("timeout", 25))
+    log_snippet = r.text[:500].replace("\n", " ")
+    print(f"DEBUG GET {url.split('?')[0]} -> {r.status_code} : {log_snippet}", file=sys.stderr, flush=True)
+    r.raise_for_status()
+    return r
 
 
-def build_hourly_data(transactions):
-    hourly_hot = {}
-    hourly_cold = {}
+# ===== Справочник товаров =====
+def load_products():
+    global PRODUCT_CACHE, PRODUCT_CACHE_TS
+    if PRODUCT_CACHE and time.time() - PRODUCT_CACHE_TS < 3600:
+        return PRODUCT_CACHE
+    mapping = {}
+    per_page = 500
+    for ptype in ("products", "batchtickets"):
+        page = 1
+        while True:
+            url = (
+                f"https://{ACCOUNT_NAME}.joinposter.com/api/menu.getProducts"
+                f"?token={POSTER_TOKEN}&type={ptype}&per_page={per_page}&page={page}"
+            )
+            try:
+                resp = _get(url)
+                data = resp.json().get("response", [])
+            except Exception as e:
+                print("ERROR load_products:", e, file=sys.stderr, flush=True)
+                break
+            if not isinstance(data, list) or not data:
+                break
+            for item in data:
+                try:
+                    pid = int(item.get("product_id", 0))
+                    cid = int(item.get("menu_category_id", 0))
+                    if pid and cid:
+                        mapping[pid] = cid
+                except Exception:
+                    continue
+            if len(data) < per_page:
+                break
+            page += 1
+    PRODUCT_CACHE = mapping
+    PRODUCT_CACHE_TS = time.time()
+    print(f"DEBUG products cached: {len(PRODUCT_CACHE)} items", file=sys.stderr, flush=True)
+    return PRODUCT_CACHE
 
-    for txn in transactions:
-        close_time = datetime.datetime.strptime(txn["date_close"], "%Y-%m-%d %H:%M:%S")
-        utc_time = pytz.utc.localize(close_time)
-        local_time = utc_time.astimezone(LOCAL_TZ)
 
-        hour = local_time.hour
+# ===== Продажи по категориям =====
+def fetch_category_sales():
+    today = date.today().strftime("%Y-%m-%d")
+    url = (
+        f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getCategoriesSales"
+        f"?token={POSTER_TOKEN}&dateFrom={today}&dateTo={today}"
+    )
+    try:
+        resp = _get(url)
+        rows = resp.json().get("response", [])
+    except Exception as e:
+        print("ERROR categories:", e, file=sys.stderr, flush=True)
+        return {"hot": {}, "cold": {}}
+    hot, cold = {}, {}
+    for row in rows:
+        try:
+            cid = int(row.get("category_id", 0))
+            name = row.get("category_name", "").strip()
+            qty = int(float(row.get("count", 0)))
+        except Exception:
+            continue
+        if cid in HOT_CATEGORIES:
+            hot[name] = hot.get(name, 0) + qty
+        elif cid in COLD_CATEGORIES:
+            cold[name] = cold.get(name, 0) + qty
+    hot = dict(sorted(hot.items(), key=lambda x: x[1], reverse=True))
+    cold = dict(sorted(cold.items(), key=lambda x: x[1], reverse=True))
+    return {"hot": hot, "cold": cold}
 
-        for product in txn.get("products", []):
-            cat_id = str(product.get("workshop_id", ""))
-            num = float(product.get("num", 0))
 
-            if cat_id in HOT_CATEGORIES:
-                hourly_hot[hour] = hourly_hot.get(hour, 0) + num
-            elif cat_id in COLD_CATEGORIES:
-                hourly_cold[hour] = hourly_cold.get(hour, 0) + num
+# ===== Почасовая диаграмма (сегодня + прошлая неделя) =====
+def fetch_transactions_hourly():
+    products = load_products()
+    today = datetime.now().date()
+    last_week = today - timedelta(days=7)
 
+    def collect_for_day(day):
+        per_page = 500
+        page = 1
+        hours = list(range(10, 23))
+        hot_by_hour = [0] * len(hours)
+        cold_by_hour = [0] * len(hours)
+
+        while True:
+            url = (
+                f"https://{ACCOUNT_NAME}.joinposter.com/api/transactions.getTransactions"
+                f"?token={POSTER_TOKEN}&date_from={day}&date_to={day}"
+                f"&per_page={per_page}&page={page}"
+            )
+            try:
+                resp = _get(url)
+                body = resp.json().get("response", {})
+                items = body.get("data", []) or []
+                total = int(body.get("count", 0))
+                page_info = body.get("page", {}) or {}
+                per_page_resp = int(page_info.get("per_page", per_page) or per_page)
+            except Exception as e:
+                print("ERROR transactions:", e, file=sys.stderr, flush=True)
+                break
+
+            if not items:
+                break
+
+            for trx in items:
+                dt_str = trx.get("date_close")
+                try:
+                    dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+                    dt = dt + timedelta(hours=TZ_OFFSET)   # <<< смещение по Киеву
+                    hour = dt.hour
+                    if hour not in hours:
+                        continue
+                    idx = hours.index(hour)
+                except Exception:
+                    continue
+
+                for p in trx.get("products", []) or []:
+                    try:
+                        pid = int(p.get("product_id", 0))
+                        qty = int(float(p.get("num", 0)))
+                    except Exception:
+                        continue
+                    cid = products.get(pid, 0)
+                    if cid in HOT_CATEGORIES:
+                        hot_by_hour[idx] += qty
+                    elif cid in COLD_CATEGORIES:
+                        cold_by_hour[idx] += qty
+
+            if per_page_resp * page >= total:
+                break
+            page += 1
+
+        # накопительно
+        hot_cum, cold_cum = [], []
+        th, tc = 0, 0
+        for h, c in zip(hot_by_hour, cold_by_hour):
+            th += h; tc += c
+            hot_cum.append(th)
+            cold_cum.append(tc)
+
+        return hot_cum, cold_cum
+
+    hot_today, cold_today = collect_for_day(today.strftime("%Y-%m-%d"))
+    hot_prev, cold_prev = collect_for_day(last_week.strftime("%Y-%m-%d"))
+
+    now_hour = (datetime.now() + timedelta(hours=TZ_OFFSET)).hour
     hours = list(range(10, 23))
-    hot_cumulative, cold_cumulative = [], []
-    hot_total, cold_total = 0, 0
+    for i, hour in enumerate(hours):
+        if hour > now_hour:
+            hot_today[i] = None
+            cold_today[i] = None
 
-    for h in hours:
-        hot_total += hourly_hot.get(h, 0)
-        cold_total += hourly_cold.get(h, 0)
-        hot_cumulative.append(hot_total)
-        cold_cumulative.append(cold_total)
-
-    return hours, hot_cumulative, cold_cumulative
-
-
-# ================== DASH ==================
-app = dash.Dash(__name__)
-server = app.server
-
-app.layout = html.Div([
-    html.Div([
-        html.Div(id="hot-block", className="block"),
-        html.Div(id="cold-block", className="block"),
-        html.Div(id="bookings-block", className="block"),
-    ], className="row"),
-
-    html.Div([
-        html.H3("📊 Завантаженість кухні", style={"textAlign": "center"}),
-        dcc.Graph(id="kitchen-load")
-    ], className="graph-block"),
-
-    dcc.Interval(id="interval", interval=60 * 1000, n_intervals=0)
-])
+    labels = [f"{h:02d}:00" for h in hours]
+    return {
+        "labels": labels,
+        "hot": hot_today,
+        "cold": cold_today,
+        "hot_prev": hot_prev,
+        "cold_prev": cold_prev
+    }
 
 
-@app.callback(
-    [Output("hot-block", "children"),
-     Output("cold-block", "children"),
-     Output("bookings-block", "children"),
-     Output("kitchen-load", "figure")],
-    [Input("interval", "n_intervals")]
-)
-def update_dashboard(n):
-    today = datetime.datetime.now(LOCAL_TZ).strftime("%Y%m%d")
-    last_week = (datetime.datetime.now(LOCAL_TZ) - datetime.timedelta(days=7)).strftime("%Y%m%d")
+# ===== Бронирования =====
+def fetch_bookings():
+    if not CHOICE_TOKEN:
+        return []
+    url = f"https://{ACCOUNT_NAME}.choiceqr.com/api/bookings/list"
+    headers = {"Authorization": f"Bearer {CHOICE_TOKEN}"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=20)
+        data = resp.json()
+    except Exception as e:
+        print("ERROR Choice:", e, file=sys.stderr, flush=True)
+        return []
+    items = None
+    for key in ("items", "data", "list", "bookings", "response"):
+        v = data.get(key)
+        if isinstance(v, list):
+            items = v; break
+    if not items:
+        return []
+    out = []
+    for b in items[:12]:
+        name = (b.get("customer") or {}).get("name") or b.get("name") or "—"
+        guests = b.get("personCount") or b.get("persons") or b.get("guests") or "—"
+        time_str = b.get("dateTime") or b.get("bookingDt") or b.get("startDateTime") or ""
+        if isinstance(time_str, str) and len(time_str) >= 16:
+            try:
+                time_str = datetime.fromisoformat(time_str.replace("Z","+00:00")).strftime("%H:%M")
+            except Exception:
+                try:
+                    time_str = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
+                except Exception:
+                    pass
+        out.append({"name": name, "time": time_str or "—", "guests": guests})
+    return out
 
-    # --- Блок продаж ---
-    sales_today = fetch_categories_sales(today, today)
 
-    hot_sales = {HOT_CATEGORIES[c["category_id"]]: int(float(c["count"]))
-                 for c in sales_today if c["category_id"] in HOT_CATEGORIES}
-    cold_sales = {COLD_CATEGORIES[c["category_id"]]: int(float(c["count"]))
-                  for c in sales_today if c["category_id"] in COLD_CATEGORIES}
+# ===== API =====
+@app.route("/api/sales")
+def api_sales():
+    global CACHE, CACHE_TS
+    if time.time() - CACHE_TS > 60:
+        sums = fetch_category_sales()
+        hourly = fetch_transactions_hourly()
+        bookings = fetch_bookings()
+        CACHE.update({
+            "hot": sums["hot"],
+            "cold": sums["cold"],
+            "hourly": hourly,
+            "bookings": bookings
+        })
+        CACHE_TS = time.time()
+    return jsonify(CACHE)
 
-    hot_block = [html.H3("🔥 Гарячий цех")] + [html.Div(f"{k}: {v}") for k, v in hot_sales.items()]
-    cold_block = [html.H3("❄️ Холодний цех")] + [html.Div(f"{k}: {v}") for k, v in cold_sales.items()]
 
-    # --- Бронирования ---
-    bookings_block = [html.H3("📅 Бронювання"),
-                      html.Div("Загальна кількість замовлень: 0")]
+# ===== UI =====
+@app.route("/")
+def index():
+    template = """
+    <html>
+    <head>
+        <meta charset="utf-8" />
+        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <style>
+            body{margin:0;background:#0f0f0f;color:#eee;font-family:Inter,Arial,sans-serif}
+            .wrap{padding:18px;max-width:1600px;margin:0 auto}
+            .row{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+            .card{background:#151515;border-radius:14px;padding:14px 16px}
+            .card.chart{grid-column:1/-1}
+            h2{margin:4px 0 10px 0;font-size:26px}
+            table{width:100%;border-collapse:collapse;font-size:18px}
+            td{padding:4px 2px} td:last-child{text-align:right}
+        </style>
+    </head>
+    <body>
+        <div class="wrap">
+            <div class="row">
+                <div class="card hot">
+                    <h2>🔥 Гарячий цех</h2>
+                    <table id="hot_tbl"></table>
+                </div>
+                <div class="card cold">
+                    <h2>❄️ Холодний цех</h2>
+                    <table id="cold_tbl"></table>
+                </div>
+                <div class="card book">
+                    <h2>📅 Бронювання</h2>
+                    <table id="book_tbl"></table>
+                </div>
+                <div class="card chart">
+                    <h2>📊 Замовлення по годинах (накопич.)</h2>
+                    <canvas id="chart" height="160"></canvas>
+                </div>
+            </div>
+        </div>
+        <script>
+        let chart;
+        async function refresh(){
+            const r = await fetch('/api/sales'); const data = await r.json();
 
-    # --- Диаграмма ---
-    today_tx = fetch_transactions(today, today)
-    week_tx = fetch_transactions(last_week, last_week)
+            function fill(id, obj){
+                const el = document.getElementById(id);
+                let html = "";
+                Object.entries(obj).forEach(([k,v]) => html += `<tr><td>${k}</td><td>${v}</td></tr>`);
+                if(!html) html = "<tr><td>—</td><td>0</td></tr>";
+                el.innerHTML = html;
+            }
+            fill('hot_tbl', data.hot || {});
+            fill('cold_tbl', data.cold || {});
+            const b = document.getElementById('book_tbl');
+            b.innerHTML = (data.bookings||[]).map(x => `<tr><td>${x.name}</td><td>${x.time}</td><td>${x.guests}</td></tr>`).join('') || "<tr><td>—</td></tr>";
 
-    hours, hot_today, cold_today = build_hourly_data(today_tx)
-    _, hot_week, cold_week = build_hourly_data(week_tx)
+            const labels = (data.hourly&&data.hourly.labels)||[];
+            const hot = (data.hourly&&data.hourly.hot)||[];
+            const cold = (data.hourly&&data.hourly.cold)||[];
+            const hot_prev = (data.hourly&&data.hourly.hot_prev)||[];
+            const cold_prev = (data.hourly&&data.hourly.cold_prev)||[];
 
-    now_hour = datetime.datetime.now(LOCAL_TZ).hour
-    cutoff = max(10, min(now_hour, 22))
-
-    hours_cut = [h for h in hours if h <= cutoff]
-    hot_today_cut = hot_today[:len(hours_cut)]
-    cold_today_cut = cold_today[:len(hours_cut)]
-
-    fig = go.Figure()
-    fig.add_trace(go.Scatter(x=hours_cut, y=hot_today_cut, mode="lines+markers",
-                             name="Гарячий сьогодні", line=dict(color="orange", width=3)))
-    fig.add_trace(go.Scatter(x=hours_cut, y=cold_today_cut, mode="lines+markers",
-                             name="Холодний сьогодні", line=dict(color="skyblue", width=3)))
-    fig.add_trace(go.Scatter(x=hours, y=hot_week, mode="lines", name="Гарячий мин.тиждень",
-                             line=dict(color="orange", dash="dot")))
-    fig.add_trace(go.Scatter(x=hours, y=cold_week, mode="lines", name="Холодний мин.тиждень",
-                             line=dict(color="skyblue", dash="dot")))
-
-    fig.update_layout(template="plotly_dark",
-                      xaxis=dict(title="Година", range=[10, 22]),
-                      yaxis=dict(title="Кількість замовлень (накопич.)"),
-                      margin=dict(l=20, r=20, t=20, b=20),
-                      legend=dict(orientation="h", y=1.1, x=0.3))
-
-    return hot_block, cold_block, bookings_block, fig
+            const ctx = document.getElementById('chart').getContext('2d');
+            if(chart) chart.destroy();
+            chart = new Chart(ctx,{
+                type:'line',
+                data:{
+                    labels:labels,
+                    datasets:[
+                        {label:'Гарячий (сегодня)', data:hot, borderColor:'#ff8800', borderWidth:3, tension:0.25, fill:false, spanGaps:false},
+                        {label:'Холодний (сегодня)', data:cold, borderColor:'#33b5ff', borderWidth:3, tension:0.25, fill:false, spanGaps:false},
+                        {label:'Гарячий (прошлая неделя)', data:hot_prev, borderColor:'#ffbb66', borderWidth:2, borderDash:[6,4], tension:0.25, fill:false, spanGaps:false},
+                        {label:'Холодний (прошлая неделя)', data:cold_prev, borderColor:'#66cfff', borderWidth:2, borderDash:[6,4], tension:0.25, fill:false, spanGaps:false}
+                    ]
+                },
+                options:{
+                    responsive:true,
+                    plugins:{legend:{labels:{color:'#ddd'}}},
+                    scales:{
+                        x:{ticks:{color:'#bbb'}, min:"10:00", max:"22:00"},
+                        y:{ticks:{color:'#bbb'}, beginAtZero:true}
+                    }
+                }
+            });
+        }
+        refresh(); setInterval(refresh, 60000);
+        </script>
+    </body>
+    </html>
+    """
+    return render_template_string(template)
 
 
 if __name__ == "__main__":
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
