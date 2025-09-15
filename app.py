@@ -2,7 +2,7 @@ import os
 import time
 import requests
 import sys
-from datetime import date, datetime, timedelta
+from datetime import datetime, timedelta
 from flask import Flask, render_template_string, jsonify
 
 app = Flask(__name__)
@@ -11,15 +11,12 @@ app = Flask(__name__)
 ACCOUNT_NAME = "poka-net3"
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
 CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # опционален (бронирования)
-TZ_OFFSET = int(os.getenv("TZ_OFFSET", "3"))       # Киев по умолчанию +3
 
 # Категории POS ID
 HOT_CATEGORIES  = {4, 13, 15, 46, 33}
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 
 # Кэш
-PRODUCT_CACHE = {}
-PRODUCT_CACHE_TS = 0
 CACHE = {"hot": {}, "cold": {}, "hourly": {}, "bookings": []}
 CACHE_TS = 0
 
@@ -27,54 +24,15 @@ CACHE_TS = 0
 # ===== Helpers =====
 def _get(url, **kwargs):
     r = requests.get(url, timeout=kwargs.pop("timeout", 25))
-    log_snippet = r.text[:500].replace("\n", " ")
+    log_snippet = r.text[:300].replace("\n", " ")
     print(f"DEBUG GET {url.split('?')[0]} -> {r.status_code} : {log_snippet}", file=sys.stderr, flush=True)
     r.raise_for_status()
     return r
 
 
-# ===== Справочник товаров =====
-def load_products():
-    global PRODUCT_CACHE, PRODUCT_CACHE_TS
-    if PRODUCT_CACHE and time.time() - PRODUCT_CACHE_TS < 3600:
-        return PRODUCT_CACHE
-    mapping = {}
-    per_page = 500
-    for ptype in ("products", "batchtickets"):
-        page = 1
-        while True:
-            url = (
-                f"https://{ACCOUNT_NAME}.joinposter.com/api/menu.getProducts"
-                f"?token={POSTER_TOKEN}&type={ptype}&per_page={per_page}&page={page}"
-            )
-            try:
-                resp = _get(url)
-                data = resp.json().get("response", [])
-            except Exception as e:
-                print("ERROR load_products:", e, file=sys.stderr, flush=True)
-                break
-            if not isinstance(data, list) or not data:
-                break
-            for item in data:
-                try:
-                    pid = int(item.get("product_id", 0))
-                    cid = int(item.get("menu_category_id", 0))
-                    if pid and cid:
-                        mapping[pid] = cid
-                except Exception:
-                    continue
-            if len(data) < per_page:
-                break
-            page += 1
-    PRODUCT_CACHE = mapping
-    PRODUCT_CACHE_TS = time.time()
-    print(f"DEBUG products cached: {len(PRODUCT_CACHE)} items", file=sys.stderr, flush=True)
-    return PRODUCT_CACHE
-
-
 # ===== Продажи по категориям =====
 def fetch_category_sales():
-    today = date.today().strftime("%Y-%m-%d")
+    today = datetime.now().strftime("%Y-%m-%d")
     url = (
         f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getCategoriesSales"
         f"?token={POSTER_TOKEN}&dateFrom={today}&dateTo={today}"
@@ -102,89 +60,67 @@ def fetch_category_sales():
     return {"hot": hot, "cold": cold}
 
 
-# ===== Почасовая диаграмма (сегодня + прошлая неделя) =====
+# ===== Почасовая диаграмма через dash.getAnalytics =====
 def fetch_transactions_hourly():
-    products = load_products()
     today = datetime.now().date()
     last_week = today - timedelta(days=7)
 
-    def collect_for_day(day):
-        per_page = 500
-        page = 1
-        hours = list(range(10, 23))
-        hot_by_hour = [0] * len(hours)
-        cold_by_hour = [0] * len(hours)
+    def get_day(day):
+        url = (
+            f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getAnalytics"
+            f"?token={POSTER_TOKEN}&dateFrom={day.strftime('%Y%m%d')}&dateTo={day.strftime('%Y%m%d')}"
+            f"&interpolate=hour&type=categories"
+        )
+        try:
+            resp = _get(url)
+            body = resp.json().get("response", {})
+        except Exception as e:
+            print("ERROR analytics:", e, file=sys.stderr, flush=True)
+            return [0]*24, [0]*24
 
-        while True:
-            url = (
-                f"https://{ACCOUNT_NAME}.joinposter.com/api/transactions.getTransactions"
-                f"?token={POSTER_TOKEN}&date_from={day}&date_to={day}"
-                f"&per_page={per_page}&page={page}"
-            )
+        # categories по часам
+        hot_hours = [0]*24
+        cold_hours = [0]*24
+        categories = body.get("categories", [])
+        for cat in categories:
             try:
-                resp = _get(url)
-                body = resp.json().get("response", {})
-                items = body.get("data", []) or []
-                total = int(body.get("count", 0))
-                page_info = body.get("page", {}) or {}
-                per_page_resp = int(page_info.get("per_page", per_page) or per_page)
-            except Exception as e:
-                print("ERROR transactions:", e, file=sys.stderr, flush=True)
-                break
+                cid = int(cat.get("category_id", 0))
+                hourly = cat.get("data_hourly", [])
+                hourly = [int(float(x)) if x else 0 for x in hourly]
+            except Exception:
+                continue
+            if cid in HOT_CATEGORIES:
+                hot_hours = [h+c for h,c in zip(hot_hours, hourly)]
+            elif cid in COLD_CATEGORIES:
+                cold_hours = [h+c for h,c in zip(cold_hours, hourly)]
 
-            if not items:
-                break
+        # накопительно
+        hot_cum, cold_cum = [], []
+        th, tc = 0, 0
+        for h, c in zip(hot_hours, cold_hours):
+            th += h; tc += c
+            hot_cum.append(th)
+            cold_cum.append(tc)
 
-            for trx in items:
-                dt_str = trx.get("date_close")
-                try:
-                    dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-                    dt = dt + timedelta(hours=TZ_OFFSET)   # смещение Киев
-                    hour = dt.hour
-                    if hour not in hours:
-                        continue
-                except Exception:
-                    continue
+        return hot_cum, cold_cum
 
-                for p in trx.get("products", []) or []:
-                    try:
-                        pid = int(p.get("product_id", 0))
-                        qty = int(float(p.get("num", 0)))
-                    except Exception:
-                        continue
-                    cid = products.get(pid, 0)
-                    # <<< накопительно: добавляем во ВСЕ часы до закрытия
-                    for h in hours:
-                        if h <= hour:
-                            idx = hours.index(h)
-                            if cid in HOT_CATEGORIES:
-                                hot_by_hour[idx] += qty
-                            elif cid in COLD_CATEGORIES:
-                                cold_by_hour[idx] += qty
+    hot_today, cold_today = get_day(today)
+    hot_prev, cold_prev = get_day(last_week)
 
-            if per_page_resp * page >= total:
-                break
-            page += 1
-
-        return hot_by_hour, cold_by_hour
-
-    hot_today, cold_today = collect_for_day(today.strftime("%Y-%m-%d"))
-    hot_prev, cold_prev = collect_for_day(last_week.strftime("%Y-%m-%d"))
-
-    now_hour = (datetime.now() + timedelta(hours=TZ_OFFSET)).hour
-    hours = list(range(10, 23))
-    for i, hour in enumerate(hours):
-        if hour > now_hour:
+    # обрезаем по текущему часу
+    now_hour = datetime.now().hour
+    for i in range(24):
+        if i > now_hour:
             hot_today[i] = None
             cold_today[i] = None
 
-    labels = [f"{h:02d}:00" for h in hours]
+    labels = [f"{h:02d}:00" for h in range(10, 23)]
     return {
         "labels": labels,
-        "hot": hot_today,
-        "cold": cold_today,
-        "hot_prev": hot_prev,
-        "cold_prev": cold_prev
+        "hot": hot_today[10:23],
+        "cold": cold_today[10:23],
+        "hot_prev": hot_prev[10:23],
+        "cold_prev": cold_prev[10:23]
     }
 
 
