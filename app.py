@@ -179,7 +179,7 @@ def fetch_bookings():
         print("DEBUG: CHOICE_TOKEN not set", file=sys.stderr, flush=True)
         return []
 
-    url = f"https://{ACCOUNT_NAME}.choiceqr.com/api/bookings/list"
+    url = "https://greco.choiceqr.com/api/bookings/list"
     headers = {"Authorization": f"Bearer {CHOICE_TOKEN}"}
     try:
         resp = requests.get(url, headers=headers, timeout=20)
@@ -189,25 +189,21 @@ def fetch_bookings():
         print("ERROR Choice:", e, file=sys.stderr, flush=True)
         return []
 
-    # API может вернуть массив напрямую
     if isinstance(data, list):
         items = data
     else:
-        items = None
+        items = []
         for key in ("items", "data", "list", "bookings", "response"):
             v = data.get(key)
             if isinstance(v, list):
                 items = v
                 break
-        if items is None:
-            return []
 
     out = []
     for b in items[:12]:
         name = (b.get("customer") or {}).get("name") or b.get("name") or "—"
         guests = b.get("personCount") or b.get("persons") or b.get("guests") or "—"
 
-        # dateTime может быть объектом или строкой
         time_val = b.get("dateTime")
         if isinstance(time_val, dict):
             time_str = next(iter(time_val.values()), "")
