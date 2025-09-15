@@ -3,7 +3,7 @@ import time
 import math
 import requests
 import sys
-from datetime import date, datetime
+from datetime import date, datetime, timedelta
 from flask import Flask, render_template_string, jsonify
 
 app = Flask(__name__)
@@ -20,7 +20,7 @@ COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 # Кэш
 PRODUCT_CACHE = {}           # product_id -> menu_category_id
 PRODUCT_CACHE_TS = 0
-CACHE = {"hot": {}, "cold": {}, "hourly": {}, "bookings": []}
+CACHE = {"hot": {}, "cold": {}, "hourly": {}, "hourly_prev": {}, "bookings": []}
 CACHE_TS = 0
 
 # ===== Helpers =====
@@ -34,7 +34,6 @@ def _get(url, **kwargs):
 
 # ===== Справочник товаров (пагинация) =====
 def load_products():
-    """Грузим ВСЕ товары обоих типов и строим product_id -> menu_category_id."""
     global PRODUCT_CACHE, PRODUCT_CACHE_TS
     if PRODUCT_CACHE and time.time() - PRODUCT_CACHE_TS < 3600:
         return PRODUCT_CACHE
@@ -104,26 +103,25 @@ def fetch_category_sales():
         elif cid in COLD_CATEGORIES:
             cold[name] = cold.get(name, 0) + qty
 
-    # сортировка по убыванию
     hot = dict(sorted(hot.items(), key=lambda x: x[1], reverse=True))
     cold = dict(sorted(cold.items(), key=lambda x: x[1], reverse=True))
     return {"hot": hot, "cold": cold}
 
 # ===== Почасовая диаграмма: чеки + справочник =====
-def fetch_transactions_hourly():
+def fetch_transactions_hourly(day_offset=0):
     products = load_products()
-    today = date.today().strftime("%Y-%m-%d")
+    target_date = (date.today() - timedelta(days=day_offset)).strftime("%Y-%m-%d")
 
     per_page = 500
     page = 1
-    hours = list(range(8, 24))               # рабочие часы
+    hours = list(range(10, 23))   # от 10 до 22
     hot_by_hour = [0] * len(hours)
     cold_by_hour = [0] * len(hours)
 
     while True:
         url = (
             f"https://{ACCOUNT_NAME}.joinposter.com/api/transactions.getTransactions"
-            f"?token={POSTER_TOKEN}&date_from={today}&date_to={today}"
+            f"?token={POSTER_TOKEN}&date_from={target_date}&date_to={target_date}"
             f"&per_page={per_page}&page={page}"
         )
         try:
@@ -163,12 +161,10 @@ def fetch_transactions_hourly():
                 elif cid in COLD_CATEGORIES:
                     cold_by_hour[idx] += qty
 
-        # пагинация
         if per_page_resp * page >= total:
             break
         page += 1
 
-    # накопительно
     hot_cum, cold_cum = [], []
     th, tc = 0, 0
     for h, c in zip(hot_by_hour, cold_by_hour):
@@ -179,7 +175,7 @@ def fetch_transactions_hourly():
     labels = [f"{h:02d}:00" for h in hours]
     return {"labels": labels, "hot": hot_cum, "cold": cold_cum}
 
-# ===== Бронирования (мягкий режим) =====
+# ===== Бронирования =====
 def fetch_bookings():
     if not CHOICE_TOKEN:
         return []
@@ -192,7 +188,6 @@ def fetch_bookings():
         print("ERROR Choice:", e, file=sys.stderr, flush=True)
         return []
 
-    # разные инсталляции отдают по-разному — ищем массив
     items = None
     for key in ("items", "data", "list", "bookings", "response"):
         v = data.get(key)
@@ -202,12 +197,11 @@ def fetch_bookings():
         return []
 
     out = []
-    for b in items[:12]:  # компактно
+    for b in items[:12]:
         name = (b.get("customer") or {}).get("name") or b.get("name") or "—"
         guests = b.get("personCount") or b.get("persons") or b.get("guests") or "—"
         time_str = b.get("dateTime") or b.get("bookingDt") or b.get("startDateTime") or ""
         if isinstance(time_str, str) and len(time_str) >= 16:
-            # оставим только HH:MM если ISO/SQL
             try:
                 time_str = datetime.fromisoformat(time_str.replace("Z","+00:00")).strftime("%H:%M")
             except Exception:
@@ -224,9 +218,14 @@ def api_sales():
     global CACHE, CACHE_TS
     if time.time() - CACHE_TS > 60:
         sums = fetch_category_sales()
-        hourly = fetch_transactions_hourly()
+        hourly = fetch_transactions_hourly(0)
+        prev = fetch_transactions_hourly(7)
         bookings = fetch_bookings()
-        CACHE.update({"hot": sums["hot"], "cold": sums["cold"], "hourly": hourly, "bookings": bookings})
+        CACHE.update({
+            "hot": sums["hot"], "cold": sums["cold"],
+            "hourly": hourly, "hourly_prev": prev,
+            "bookings": bookings
+        })
         CACHE_TS = time.time()
     return jsonify(CACHE)
 
@@ -243,7 +242,6 @@ def index():
                 --bg:#0f0f0f; --panel:#151515; --fg:#eee;
                 --hot:#ff8800; --cold:#33b5ff; --ok:#00d46a; --frame:#ffb000;
             }
-            *{box-sizing:border-box}
             body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif}
             .wrap{padding:18px;max-width:1600px;margin:0 auto}
             .row{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
@@ -252,17 +250,10 @@ def index():
                 border-radius:14px;
                 padding:14px 16px;
                 position:relative;
-                outline:3px solid rgba(255,255,255,0.04); /* базовый контур */
+                outline:3px solid rgba(255,255,255,0.04);
                 box-shadow:0 0 0 3px rgba(0,0,0,0) inset, 0 0 22px rgba(0,0,0,0.45);
             }
-            .card.hot{ outline-color:rgba(255,136,0,0.45) }
-            .card.cold{ outline-color:rgba(51,181,255,0.45) }
-            .card.book{ outline-color:rgba(0,212,106,0.45) }
-            .card.chart{
-                grid-column:1/-1;
-                outline-color:rgba(255,176,0,0.55);
-            }
-            h2{margin:4px 0 10px 0;font-size:26px;display:flex;align-items:center;gap:8px}
+            .card.chart{grid-column:1/-1;outline-color:rgba(255,176,0,0.55);}
             table{width:100%;border-collapse:collapse;font-size:18px}
             td{padding:4px 2px}
             td:last-child{text-align:right}
@@ -272,30 +263,31 @@ def index():
     <body>
         <div class="wrap">
             <div class="row">
-                <div class="card hot">
-                    <h2>🔥 Гарячий цех</h2>
-                    <table id="hot_tbl"></table>
-                </div>
-                <div class="card cold">
-                    <h2>❄️ Холодний цех</h2>
-                    <table id="cold_tbl"></table>
-                </div>
-                <div class="card book">
-                    <h2>📅 Бронювання</h2>
-                    <table id="book_tbl"></table>
-                </div>
-                <div class="card chart">
-                    <h2>📊 Замовлення по годинах (накопич.)</h2>
-                    <canvas id="chart" height="160"></canvas>
-                </div>
+                <div class="card hot"><h2>🔥 Гарячий цех</h2><table id="hot_tbl"></table></div>
+                <div class="card cold"><h2>❄️ Холодний цех</h2><table id="cold_tbl"></table></div>
+                <div class="card book"><h2>📅 Бронювання</h2><table id="book_tbl"></table></div>
+                <div class="card chart"><h2>📊 Замовлення по годинах (накопич.)</h2><canvas id="chart" height="160"></canvas></div>
             </div>
         </div>
         <div class="logo">GRECO</div>
 
         <script>
         let chart;
+        function cutToNow(labels, arrHot, arrCold){
+            const now = new Date();
+            const curHour = now.getHours();
+            let cutIndex = labels.findIndex(l => parseInt(l) > curHour);
+            if(cutIndex === -1) cutIndex = labels.length;
+            return {
+                labels: labels.slice(0, cutIndex),
+                hot: arrHot.slice(0, cutIndex),
+                cold: arrCold.slice(0, cutIndex)
+            }
+        }
+
         async function refresh(){
-            const r = await fetch('/api/sales'); const data = await r.json();
+            const r = await fetch('/api/sales');
+            const data = await r.json();
 
             function fill(id, obj){
                 const el = document.getElementById(id);
@@ -306,23 +298,23 @@ def index():
             }
             fill('hot_tbl', data.hot || {});
             fill('cold_tbl', data.cold || {});
-
             const b = document.getElementById('book_tbl');
             b.innerHTML = (data.bookings||[]).map(x => `<tr><td>${x.name}</td><td>${x.time}</td><td>${x.guests}</td></tr>`).join('') || "<tr><td>—</td><td></td><td></td></tr>";
 
-            const labels = (data.hourly&&data.hourly.labels)||[];
-            const hot = (data.hourly&&data.hourly.hot)||[];
-            const cold = (data.hourly&&data.hourly.cold)||[];
+            let today = cutToNow(data.hourly.labels, data.hourly.hot, data.hourly.cold);
+            let prev = cutToNow(data.hourly_prev.labels, data.hourly_prev.hot, data.hourly_prev.cold);
 
             const ctx = document.getElementById('chart').getContext('2d');
             if(chart) chart.destroy();
             chart = new Chart(ctx,{
                 type:'line',
                 data:{
-                    labels:labels,
+                    labels: today.labels,
                     datasets:[
-                        {label:'Гарячий', data:hot, borderColor:'#ff8800', backgroundColor:'#ff8800', tension:0.25, fill:false},
-                        {label:'Холодний', data:cold, borderColor:'#33b5ff', backgroundColor:'#33b5ff', tension:0.25, fill:false}
+                        {label:'Гарячий', data:today.hot, borderColor:'#ff8800', backgroundColor:'#ff8800', tension:0.25, fill:false},
+                        {label:'Холодний', data:today.cold, borderColor:'#33b5ff', backgroundColor:'#33b5ff', tension:0.25, fill:false},
+                        {label:'Гарячий (мин. тижд.)', data:prev.hot, borderColor:'#ff8800', borderDash:[6,4], tension:0.25, fill:false},
+                        {label:'Холодний (мин. тижд.)', data:prev.cold, borderColor:'#33b5ff', borderDash:[6,4], tension:0.25, fill:false}
                     ]
                 },
                 options:{
