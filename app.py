@@ -87,6 +87,9 @@ def fetch_transactions_hourly():
                 hourly = [int(float(x)) if x else 0 for x in hourly]
             except Exception:
                 continue
+            # дополним до 24 значений
+            while len(hourly) < 24:
+                hourly.append(0)
             if cid in HOT_CATEGORIES:
                 hot_hours = [h+c for h,c in zip(hot_hours, hourly)]
             elif cid in COLD_CATEGORIES:
@@ -100,6 +103,12 @@ def fetch_transactions_hourly():
             hot_cum.append(th)
             cold_cum.append(tc)
 
+        # гарантируем длину 24
+        while len(hot_cum) < 24:
+            hot_cum.append(th)
+        while len(cold_cum) < 24:
+            cold_cum.append(tc)
+
         return hot_cum, cold_cum
 
     hot_today, cold_today = get_day(today)
@@ -107,9 +116,11 @@ def fetch_transactions_hourly():
 
     # обрезаем по текущему часу
     now_hour = datetime.now().hour
-    for i in range(24):
+    for i in range(len(hot_today)):
         if i > now_hour:
             hot_today[i] = None
+    for i in range(len(cold_today)):
+        if i > now_hour:
             cold_today[i] = None
 
     labels = [f"{h:02d}:00" for h in range(10, 23)]
