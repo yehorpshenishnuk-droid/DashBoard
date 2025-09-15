@@ -102,19 +102,42 @@ def fetch_category_sales():
     return {"hot": hot, "cold": cold}
 
 
+# ===== Открытые заказы =====
+def fetch_open_orders():
+    url = f"https://{ACCOUNT_NAME}.joinposter.com/api/incomingOrders.getIncomingOrders?token={POSTER_TOKEN}&status=1"
+    try:
+        resp = _get(url)
+        orders = resp.json().get("response", [])
+    except Exception as e:
+        print("ERROR open_orders:", e, file=sys.stderr, flush=True)
+        return []
+
+    out = []
+    for order in orders:
+        try:
+            dt_str = order.get("created_at")
+            dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S") + timedelta(hours=TZ_OFFSET)
+            hour = dt.hour
+            out.append({"hour": hour, "products": order.get("products", [])})
+        except Exception:
+            continue
+    return out
+
+
 # ===== Почасовая диаграмма (сегодня + прошлая неделя) =====
 def fetch_transactions_hourly():
     products = load_products()
     today = datetime.now().date()
     last_week = today - timedelta(days=7)
 
-    def collect_for_day(day):
+    def collect_for_day(day, include_open=False):
         per_page = 500
         page = 1
         hours = list(range(10, 23))
         hot_by_hour = [0] * len(hours)
         cold_by_hour = [0] * len(hours)
 
+        # закрытые заказы
         while True:
             url = (
                 f"https://{ACCOUNT_NAME}.joinposter.com/api/transactions.getTransactions"
@@ -139,7 +162,7 @@ def fetch_transactions_hourly():
                 dt_str = trx.get("date_close")
                 try:
                     dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-                    dt = dt + timedelta(hours=TZ_OFFSET)   # <<< смещение по Киеву
+                    dt = dt + timedelta(hours=TZ_OFFSET)
                     hour = dt.hour
                     if hour not in hours:
                         continue
@@ -163,6 +186,25 @@ def fetch_transactions_hourly():
                 break
             page += 1
 
+        # открытые заказы (только для сегодняшнего дня)
+        if include_open:
+            open_orders = fetch_open_orders()
+            for order in open_orders:
+                if order["hour"] not in hours:
+                    continue
+                idx = hours.index(order["hour"])
+                for p in order["products"] or []:
+                    try:
+                        pid = int(p.get("product_id", 0))
+                        qty = int(float(p.get("count", 0)))
+                    except Exception:
+                        continue
+                    cid = products.get(pid, 0)
+                    if cid in HOT_CATEGORIES:
+                        hot_by_hour[idx] += qty
+                    elif cid in COLD_CATEGORIES:
+                        cold_by_hour[idx] += qty
+
         # накопительно
         hot_cum, cold_cum = [], []
         th, tc = 0, 0
@@ -173,7 +215,7 @@ def fetch_transactions_hourly():
 
         return hot_cum, cold_cum
 
-    hot_today, cold_today = collect_for_day(today.strftime("%Y-%m-%d"))
+    hot_today, cold_today = collect_for_day(today.strftime("%Y-%m-%d"), include_open=True)
     hot_prev, cold_prev = collect_for_day(last_week.strftime("%Y-%m-%d"))
 
     now_hour = (datetime.now() + timedelta(hours=TZ_OFFSET)).hour
