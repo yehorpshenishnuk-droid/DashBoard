@@ -1,7 +1,6 @@
 import os
 import time
 import requests
-import sys
 from datetime import date, datetime, timedelta
 from flask import Flask, render_template_string, jsonify
 
@@ -22,11 +21,13 @@ BAR_CATEGORIES  = {9, 14, 27, 28, 34, 41, 42, 47, 22, 24, 25, 26, 39, 30}
 PRODUCT_CACHE, PRODUCT_CACHE_TS = {}, 0
 CACHE, CACHE_TS = {}, 0
 
+
 # ===== Helpers =====
 def _get(url, **kwargs):
     r = requests.get(url, timeout=kwargs.pop("timeout", 25))
     r.raise_for_status()
     return r
+
 
 def load_products():
     global PRODUCT_CACHE, PRODUCT_CACHE_TS
@@ -53,6 +54,7 @@ def load_products():
             page += 1
     PRODUCT_CACHE, PRODUCT_CACHE_TS = mapping, time.time()
     return PRODUCT_CACHE
+
 
 def fetch_category_sales(day_offset=0, cut_to_now=False):
     products = load_products()
@@ -82,16 +84,18 @@ def fetch_category_sales(day_offset=0, cut_to_now=False):
             for p in trx.get("products", []) or []:
                 pid, qty = int(p.get("product_id", 0)), int(float(p.get("num", 0)))
                 cid = products.get(pid, 0)
+                cname = trx.get("category_name", "Інше")
                 if cid in HOT_CATEGORIES:
-                    hot[trx.get("category_name","Гарячий")] = hot.get(trx.get("category_name","Гарячий"),0)+qty
+                    hot[cname] = hot.get(cname, 0) + qty
                 elif cid in COLD_CATEGORIES:
-                    cold[trx.get("category_name","Холодний")] = cold.get(trx.get("category_name","Холодний"),0)+qty
+                    cold[cname] = cold.get(cname, 0) + qty
                 elif cid in BAR_CATEGORIES:
-                    bar[trx.get("category_name","Бар")] = bar.get(trx.get("category_name","Бар"),0)+qty
+                    bar[cname] = bar.get(cname, 0) + qty
         if int(page_info.get("per_page", per_page)) * page >= total:
             break
         page += 1
     return {"hot": hot, "cold": cold, "bar": bar}
+
 
 def fetch_transactions_hourly(day_offset=0):
     products = load_products()
@@ -131,9 +135,12 @@ def fetch_transactions_hourly(day_offset=0):
         hot_cum.append(th);cold_cum.append(tc)
     return {"labels":[f"{h:02d}:00" for h in hours],"hot":hot_cum,"cold":cold_cum}
 
+
 def fetch_weather():
     if not WEATHER_API_KEY: return {}
-    url=f"http://api.openweathermap.org/data/2.5/weather?q=Софіївська Борщагівка,UA&appid={WEATHER_API_KEY}&units=metric&lang=ua"
+    # Софіївська Борщагівка координаты
+    lat, lon = 50.393, 30.368
+    url=f"http://api.openweathermap.org/data/2.5/weather?lat={lat}&lon={lon}&appid={WEATHER_API_KEY}&units=metric&lang=ua"
     try:
         data=requests.get(url,timeout=10).json()
         return {
@@ -142,6 +149,7 @@ def fetch_weather():
             "icon": data["weather"][0]["icon"]
         }
     except: return {}
+
 
 @app.route("/api/sales")
 def api_sales():
@@ -157,6 +165,7 @@ def api_sales():
                "hourly":hourly,"hourly_prev":prev_hourly,"weather":weather}
         CACHE_TS=time.time()
     return jsonify(CACHE)
+
 
 @app.route("/")
 def index():
@@ -209,14 +218,15 @@ def index():
                 let totHot=Object.values(data.hot).reduce((a,b)=>a+b,0),
                     totCold=Object.values(data.cold).reduce((a,b)=>a+b,0),
                     totBar=Object.values(data.bar).reduce((a,b)=>a+b,0);
+                let total=totHot+totCold+totBar;
                 let ctxp=document.getElementById('pie').getContext('2d');
                 if(pieChart) pieChart.destroy();
                 pieChart=new Chart(ctxp,{type:'pie',
-                    data:{labels:[`Гарячий ${Math.round(totHot/(totHot+totCold+totBar)*100)}%`,
-                                  `Холодний ${Math.round(totCold/(totHot+totCold+totBar)*100)}%`,
-                                  `Бар ${Math.round(totBar/(totHot+totCold+totBar)*100)}%`],
+                    data:{labels:['Гарячий','Холодний','Бар'],
                           datasets:[{data:[totHot,totCold,totBar],backgroundColor:['#ff8800','#33b5ff','#9b59b6']}]},
-                    options:{plugins:{legend:{display:false},tooltip:{enabled:false}}}
+                    options:{plugins:{legend:{display:false},
+                        tooltip:{enabled:false},
+                        datalabels:{color:'#fff',formatter:(v,ctx)=>ctx.chart.data.labels[ctx.dataIndex]+' '+Math.round(v/total*100)+'%'}}}
                 });
                 let now=new Date(),curHour=now.getHours();
                 let cutIdx=data.hourly.labels.findIndex(l=>parseInt(l)>curHour);
@@ -229,10 +239,11 @@ def index():
                           datasets:[{label:'Гарячий',data:today.hot,borderColor:'#ff8800',backgroundColor:'#ff8800'},
                                     {label:'Холодний',data:today.cold,borderColor:'#33b5ff',backgroundColor:'#33b5ff'},
                                     {label:'Гарячий (мин. тижд.)',data:data.hourly_prev.hot,borderColor:'#ff8800',borderDash:[6,3]},
-                                    {label:'Холодний (мин. тижд.)',data:data.hourly_prev.cold,borderColor:'#33b5ff',borderDash:[6,3]}]},
+                                    {label:'Холодний (мин. тижд.)',data=data.hourly_prev.cold,borderColor:'#33b5ff',borderDash:[6,3]}]},
                     options:{responsive:true,maintainAspectRatio:false,
                              plugins:{legend:{labels:{color:'#fff'}}},
-                             scales:{x:{ticks:{color:'#bbb'}},y:{ticks:{color:'#bbb'},beginAtZero:true}}}});
+                             scales:{x:{title:{display:true,text:'Час',color:'#fff'},ticks:{color:'#bbb'}},
+                                     y:{ticks:{color:'#bbb'},beginAtZero:true}}}});
                 if(data.weather){
                     document.getElementById('clock').innerText=new Date().toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'});
                     document.getElementById('wicon').src="http://openweathermap.org/img/wn/"+data.weather.icon+"@2x.png";
@@ -243,10 +254,12 @@ def index():
         }
         refresh();setInterval(refresh,60000);
         </script>
+        <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels"></script>
     </body>
     </html>
     """
     return render_template_string(template)
+
 
 if __name__=="__main__":
     app.run(host="0.0.0.0",port=int(os.getenv("PORT",5000)))
