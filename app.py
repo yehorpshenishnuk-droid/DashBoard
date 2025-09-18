@@ -7,29 +7,42 @@ from flask import Flask, render_template_string, jsonify
 
 app = Flask(__name__)
 
-# ==== Конфиг ====
+# ==== Конфіг ====
 ACCOUNT_NAME = "poka-net3"
-POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
+POSTER_TOKEN = os.getenv("POSTER_TOKEN")  # обов'язковий
 
-# Категории POS ID
-HOT_CATEGORIES  = {4, 13, 15, 46, 33}                 # ЧЕБУРЕКИ, М'ЯСНІ, ЯНТИКИ, ГАРЯЧІ, ПІДЕ
+# Категорії POS ID
+HOT_CATEGORIES = {4, 13, 15, 46, 33}  # ЧЕБУРЕКИ, М'ЯСНІ, ЯНТИКИ, ГАРЯЧІ, ПІДЕ
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 
-# Кэш
-PRODUCT_CACHE = {}           # product_id -> menu_category_id
+# Кеш
+PRODUCT_CACHE = {}  # product_id -> menu_category_id
 PRODUCT_CACHE_TS = 0
-CACHE = {"hot": {}, "cold": {}, "hourly": {}, "hourly_prev": {}}
+CACHE = {
+    "hot": {},
+    "cold": {},
+    "hot_prev": {},
+    "cold_prev": {},
+    "hourly": {},
+    "hourly_prev": {},
+}
 CACHE_TS = 0
+
 
 # ===== Helpers =====
 def _get(url, **kwargs):
     r = requests.get(url, timeout=kwargs.pop("timeout", 25))
     log_snippet = r.text[:1500].replace("\n", " ")
-    print(f"DEBUG GET {url.split('?')[0]} -> {r.status_code} : {log_snippet}", file=sys.stderr, flush=True)
+    print(
+        f"DEBUG GET {url.split('?')[0]} -> {r.status_code} : {log_snippet}",
+        file=sys.stderr,
+        flush=True,
+    )
     r.raise_for_status()
     return r
 
-# ===== Справочник товаров =====
+
+# ===== Довідник товарів =====
 def load_products():
     global PRODUCT_CACHE, PRODUCT_CACHE_TS
     if PRODUCT_CACHE and time.time() - PRODUCT_CACHE_TS < 3600:
@@ -72,12 +85,12 @@ def load_products():
     print(f"DEBUG products cached: {len(PRODUCT_CACHE)} items", file=sys.stderr, flush=True)
     return PRODUCT_CACHE
 
-# ===== Сводные продажи =====
-def fetch_category_sales():
-    today = date.today().strftime("%Y-%m-%d")
+
+# ===== Зведені продажі =====
+def fetch_category_sales(target_date):
     url = (
         f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getCategoriesSales"
-        f"?token={POSTER_TOKEN}&dateFrom={today}&dateTo={today}"
+        f"?token={POSTER_TOKEN}&dateFrom={target_date}&dateTo={target_date}"
     )
     try:
         resp = _get(url)
@@ -104,14 +117,15 @@ def fetch_category_sales():
     cold = dict(sorted(cold.items(), key=lambda x: x[1], reverse=True))
     return {"hot": hot, "cold": cold}
 
-# ===== Почасовая диаграмма =====
+
+# ===== Похвилинна діаграма =====
 def fetch_transactions_hourly(day_offset=0):
     products = load_products()
     target_date = (date.today() - timedelta(days=day_offset)).strftime("%Y-%m-%d")
 
     per_page = 500
     page = 1
-    hours = list(range(10, 23))   # фиксированный диапазон 10:00–22:00
+    hours = list(range(10, 23))  # фіксований діапазон 10:00–22:00
     hot_by_hour = [0] * len(hours)
     cold_by_hour = [0] * len(hours)
 
@@ -165,27 +179,52 @@ def fetch_transactions_hourly(day_offset=0):
     hot_cum, cold_cum = [], []
     th, tc = 0, 0
     for h, c in zip(hot_by_hour, cold_by_hour):
-        th += h; tc += c
+        th += h
+        tc += c
         hot_cum.append(th)
         cold_cum.append(tc)
 
     labels = [f"{h:02d}:00" for h in hours]
     return {"labels": labels, "hot": hot_cum, "cold": cold_cum}
 
+
 # ===== API =====
 @app.route("/api/sales")
 def api_sales():
     global CACHE, CACHE_TS
     if time.time() - CACHE_TS > 60:
-        sums = fetch_category_sales()
+        today = date.today().strftime("%Y-%m-%d")
+        week_ago = (date.today() - timedelta(days=7)).strftime("%Y-%m-%d")
+
+        sums_today = fetch_category_sales(today)
+        sums_prev = fetch_category_sales(week_ago)
+
         hourly = fetch_transactions_hourly(0)
         prev = fetch_transactions_hourly(7)
-        CACHE.update({
-            "hot": sums["hot"], "cold": sums["cold"],
-            "hourly": hourly, "hourly_prev": prev
-        })
+
+        # відрізаємо минулий тиждень по поточній годині
+        cur_hour = datetime.now().hour
+        cut_idx = sum(1 for h in prev["labels"] if int(h[:2]) <= cur_hour)
+        hot_prev_cut = {}
+        cold_prev_cut = {}
+        for cat, val in sums_prev["hot"].items():
+            hot_prev_cut[cat] = min(val, prev["hot"][cut_idx - 1] if cut_idx > 0 else 0)
+        for cat, val in sums_prev["cold"].items():
+            cold_prev_cut[cat] = min(val, prev["cold"][cut_idx - 1] if cut_idx > 0 else 0)
+
+        CACHE.update(
+            {
+                "hot": sums_today["hot"],
+                "cold": sums_today["cold"],
+                "hot_prev": hot_prev_cut,
+                "cold_prev": cold_prev_cut,
+                "hourly": hourly,
+                "hourly_prev": prev,
+            }
+        )
         CACHE_TS = time.time()
     return jsonify(CACHE)
+
 
 # ===== UI =====
 @app.route("/")
@@ -206,15 +245,26 @@ def index():
             .card{background:var(--panel);border-radius:14px;padding:14px 16px;}
             .card.chart{grid-column:1/-1;}
             table{width:100%;border-collapse:collapse;font-size:18px}
-            td{padding:4px 2px} td:last-child{text-align:right}
+            th, td{padding:4px 2px} td:last-child{text-align:right}
+            th{text-align:left;color:#aaa;font-weight:600}
             .logo{position:fixed;right:18px;bottom:12px;font-weight:800}
         </style>
     </head>
     <body>
         <div class="wrap">
             <div class="row">
-                <div class="card hot"><h2>🔥 Гарячий цех</h2><table id="hot_tbl"></table></div>
-                <div class="card cold"><h2>❄️ Холодний цех</h2><table id="cold_tbl"></table></div>
+                <div class="card hot">
+                    <h2>🔥 Гарячий цех</h2>
+                    <table id="hot_tbl">
+                        <tr><th>Категорія</th><th>Сьогодні</th><th>Минулого тижня</th></tr>
+                    </table>
+                </div>
+                <div class="card cold">
+                    <h2>❄️ Холодний цех</h2>
+                    <table id="cold_tbl">
+                        <tr><th>Категорія</th><th>Сьогодні</th><th>Минулого тижня</th></tr>
+                    </table>
+                </div>
                 <div class="card chart"><h2>📊 Замовлення по годинах (накопич.)</h2><canvas id="chart" height="160"></canvas></div>
             </div>
         </div>
@@ -222,65 +272,44 @@ def index():
 
         <script>
         let chart;
-        function cutToNow(labels, arrHot, arrCold){
-            const now = new Date();
-            const curHour = now.getHours();
-            let cutIndex = labels.findIndex(l => parseInt(l) > curHour);
-            if(cutIndex === -1) cutIndex = labels.length;
-            return {
-                labels: labels.slice(0, cutIndex),
-                hot: arrHot.slice(0, cutIndex),
-                cold: arrCold.slice(0, cutIndex)
-            }
-        }
 
         async function refresh(){
             const r = await fetch('/api/sales');
             const data = await r.json();
 
-            function fill(id, obj){
+            function fill(id, todayObj, prevObj){
                 const el = document.getElementById(id);
-                let html = "";
-                Object.entries(obj).forEach(([k,v]) => html += `<tr><td>${k}</td><td>${v}</td></tr>`);
-                if(!html) html = "<tr><td>—</td><td>0</td></tr>";
+                let html = "<tr><th>Категорія</th><th>Сьогодні</th><th>Минулого тижня</th></tr>";
+                const keys = new Set([...Object.keys(todayObj), ...Object.keys(prevObj)]);
+                keys.forEach(k => {
+                    html += `<tr><td>${k}</td><td>${todayObj[k]||0}</td><td>${prevObj[k]||0}</td></tr>`;
+                });
+                if(keys.size===0) html += "<tr><td>—</td><td>0</td><td>0</td></tr>";
                 el.innerHTML = html;
             }
-            fill('hot_tbl', data.hot || {});
-            fill('cold_tbl', data.cold || {});
+            fill('hot_tbl', data.hot || {}, data.hot_prev || {});
+            fill('cold_tbl', data.cold || {}, data.cold_prev || {});
 
-            // сегодняшние данные обрезаем по текущему часу
-            let today = cutToNow(data.hourly.labels, data.hourly.hot, data.hourly.cold);
-
-            // прошлую неделю показываем целиком
-            let prev = {
-                labels: data.hourly_prev.labels,
-                hot: data.hourly_prev.hot,
-                cold: data.hourly_prev.cold
-            };
-
+            // графік
             const ctx = document.getElementById('chart').getContext('2d');
             if(chart) chart.destroy();
             chart = new Chart(ctx,{
                 type:'line',
                 data:{
-                    labels: data.hourly.labels, // ось X всегда 10–22
+                    labels: data.hourly.labels,
                     datasets:[
-                        {label:'Гарячий', data:today.hot, borderColor:'#ff8800', backgroundColor:'#ff8800', tension:0.25, fill:false},
-                        {label:'Холодний', data:today.cold, borderColor:'#33b5ff', backgroundColor:'#33b5ff', tension:0.25, fill:false},
-                        {label:'Гарячий (мин. тижд.)', data:prev.hot, borderColor:'#ff8800', borderDash:[6,4], tension:0.25, fill:false},
-                        {label:'Холодний (мин. тижд.)', data:prev.cold, borderColor:'#33b5ff', borderDash:[6,4], tension:0.25, fill:false}
+                        {label:'Гарячий', data:data.hourly.hot, borderColor:'#ff8800', tension:0.25, fill:false},
+                        {label:'Холодний', data:data.hourly.cold, borderColor:'#33b5ff', tension:0.25, fill:false},
+                        {label:'Гарячий (мин. тижд.)', data:data.hourly_prev.hot, borderColor:'#ff8800', borderDash:[6,4], tension:0.25, fill:false},
+                        {label:'Холодний (мин. тижд.)', data:data.hourly_prev.cold, borderColor:'#33b5ff', borderDash:[6,4], tension:0.25, fill:false}
                     ]
                 },
                 options:{
                     responsive:true,
                     plugins:{legend:{labels:{color:'#ddd'}}},
                     scales:{
-                        x:{
-                            ticks:{color:'#bbb'},
-                            min:'10:00',
-                            max:'22:00'
-                        },
-                        y:{ticks:{color:'#bbb'}, beginAtZero:true}
+                        x:{ticks:{color:'#bbb'},min:'10:00',max:'22:00'},
+                        y:{ticks:{color:'#bbb'},beginAtZero:true}
                     }
                 }
             });
@@ -291,6 +320,7 @@ def index():
     </html>
     """
     return render_template_string(template)
+
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
