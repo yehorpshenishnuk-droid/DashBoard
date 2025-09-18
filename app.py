@@ -8,28 +8,30 @@ from flask import Flask, render_template_string, jsonify
 app = Flask(__name__)
 
 # ==== Конфиг ====
-POSTER_ACCOUNT = os.getenv("POSTER_ACCOUNT", "poka-net3")   # для Poster
-CHOICE_ACCOUNT = os.getenv("CHOICE_ACCOUNT", "the-greco")   # для Choice
-POSTER_TOKEN = os.getenv("POSTER_TOKEN")                    # обязателен
-CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")                    # API Key (строка)
+ACCOUNT_NAME = os.getenv("ACCOUNT_NAME", "poka-net3")   # Poster
+POSTER_TOKEN = os.getenv("POSTER_TOKEN")                # обязателен
+CHOICE_ACCOUNT = os.getenv("CHOICE_ACCOUNT", "the-greco")  # Choice subdomain
+CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")                # API key (X-API-KEY)
 
 # Категории POS ID
-HOT_CATEGORIES  = {4, 13, 15, 46, 33}  # ЧЕБУРЕКИ, М'ЯСНІ, ЯНТИКИ, ГАРЯЧІ, ПІДЕ
+HOT_CATEGORIES  = {4, 13, 15, 46, 33}
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 
 # Кэш
-PRODUCT_CACHE = {}           # product_id -> menu_category_id
+PRODUCT_CACHE = {}
 PRODUCT_CACHE_TS = 0
 CACHE = {"hot": {}, "cold": {}, "hourly": {}, "hourly_prev": {}, "bookings": []}
 CACHE_TS = 0
 
+
 # ===== Helpers =====
 def _get(url, **kwargs):
     r = requests.get(url, timeout=kwargs.pop("timeout", 25))
-    log_snippet = r.text[:1500].replace("\n", " ")
+    log_snippet = r.text[:800].replace("\n", " ")
     print(f"DEBUG GET {url.split('?')[0]} -> {r.status_code} : {log_snippet}", file=sys.stderr, flush=True)
     r.raise_for_status()
     return r
+
 
 # ===== Справочник товаров =====
 def load_products():
@@ -43,7 +45,7 @@ def load_products():
         page = 1
         while True:
             url = (
-                f"https://{POSTER_ACCOUNT}.joinposter.com/api/menu.getProducts"
+                f"https://{ACCOUNT_NAME}.joinposter.com/api/menu.getProducts"
                 f"?token={POSTER_TOKEN}&type={ptype}&per_page={per_page}&page={page}"
             )
             try:
@@ -74,11 +76,12 @@ def load_products():
     print(f"DEBUG products cached: {len(PRODUCT_CACHE)} items", file=sys.stderr, flush=True)
     return PRODUCT_CACHE
 
+
 # ===== Сводные продажи =====
 def fetch_category_sales():
     today = date.today().strftime("%Y-%m-%d")
     url = (
-        f"https://{POSTER_ACCOUNT}.joinposter.com/api/dash.getCategoriesSales"
+        f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getCategoriesSales"
         f"?token={POSTER_TOKEN}&dateFrom={today}&dateTo={today}"
     )
     try:
@@ -106,6 +109,7 @@ def fetch_category_sales():
     cold = dict(sorted(cold.items(), key=lambda x: x[1], reverse=True))
     return {"hot": hot, "cold": cold}
 
+
 # ===== Почасовая диаграмма =====
 def fetch_transactions_hourly(day_offset=0):
     products = load_products()
@@ -113,13 +117,13 @@ def fetch_transactions_hourly(day_offset=0):
 
     per_page = 500
     page = 1
-    hours = list(range(10, 23))   # фиксированный диапазон 10:00–22:00
+    hours = list(range(10, 23))
     hot_by_hour = [0] * len(hours)
     cold_by_hour = [0] * len(hours)
 
     while True:
         url = (
-            f"https://{POSTER_ACCOUNT}.joinposter.com/api/transactions.getTransactions"
+            f"https://{ACCOUNT_NAME}.joinposter.com/api/transactions.getTransactions"
             f"?token={POSTER_TOKEN}&date_from={target_date}&date_to={target_date}"
             f"&per_page={per_page}&page={page}"
         )
@@ -174,19 +178,18 @@ def fetch_transactions_hourly(day_offset=0):
     labels = [f"{h:02d}:00" for h in hours]
     return {"labels": labels, "hot": hot_cum, "cold": cold_cum}
 
-# ===== Бронирования (Choice) =====
+
+# ===== Бронирования (Choice API) =====
 def fetch_bookings():
     if not CHOICE_TOKEN:
         return []
-    today = date.today()
-    from_date = datetime.combine(today, datetime.min.time()).isoformat() + "Z"
-    till_date = datetime.combine(today, datetime.max.time()).isoformat() + "Z"
-
     url = (
         f"https://{CHOICE_ACCOUNT}.choiceqr.com/api/bookings/list"
-        f"?from={from_date}&till={till_date}&periodField=dateTime&page=1&perPage=20"
+        f"?from={date.today()}T00:00:00Z"
+        f"&till={date.today()}T23:59:59.999999Z"
+        f"&periodField=dateTime&page=1&perPage=20"
     )
-    headers = {"X-API-KEY": CHOICE_TOKEN}  # исправлено!
+    headers = {"X-API-KEY": CHOICE_TOKEN}
     try:
         resp = requests.get(url, headers=headers, timeout=20)
         resp.raise_for_status()
@@ -219,6 +222,7 @@ def fetch_bookings():
         out.append({"name": name, "time": time_str or "—", "guests": guests})
     return out
 
+
 # ===== API =====
 @app.route("/api/sales")
 def api_sales():
@@ -236,102 +240,12 @@ def api_sales():
         CACHE_TS = time.time()
     return jsonify(CACHE)
 
+
 # ===== UI =====
 @app.route("/")
 def index():
-    template = """
-    <html>
-    <head>
-        <meta charset="utf-8" />
-        <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-        <style>
-            :root {
-                --bg:#0f0f0f; --panel:#151515; --fg:#eee;
-                --hot:#ff8800; --cold:#33b5ff;
-            }
-            body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif}
-            .wrap{padding:18px;max-width:1600px;margin:0 auto}
-            .row{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
-            .card{background:var(--panel);border-radius:14px;padding:14px 16px;}
-            .card.chart{grid-column:1/-1;}
-            table{width:100%;border-collapse:collapse;font-size:18px}
-            td{padding:4px 2px} td:last-child{text-align:right}
-            .logo{position:fixed;right:18px;bottom:12px;font-weight:800}
-        </style>
-    </head>
-    <body>
-        <div class="wrap">
-            <div class="row">
-                <div class="card hot"><h2>🔥 Гарячий цех</h2><table id="hot_tbl"></table></div>
-                <div class="card cold"><h2>❄️ Холодний цех</h2><table id="cold_tbl"></table></div>
-                <div class="card book"><h2>📅 Бронювання</h2><table id="book_tbl"></table></div>
-                <div class="card chart"><h2>📊 Замовлення по годинах (накопич.)</h2><canvas id="chart" height="160"></canvas></div>
-            </div>
-        </div>
-        <div class="logo">GRECO</div>
+    return "<h2>GRECO Dashboard is running ✅</h2>"
 
-        <script>
-        let chart;
-        function cutToNow(labels, arrHot, arrCold){
-            const now = new Date();
-            const curHour = now.getHours();
-            let cutIndex = labels.findIndex(l => parseInt(l) > curHour);
-            if(cutIndex === -1) cutIndex = labels.length;
-            return {
-                labels: labels.slice(0, cutIndex),
-                hot: arrHot.slice(0, cutIndex),
-                cold: arrCold.slice(0, cutIndex)
-            }
-        }
-
-        async function refresh(){
-            const r = await fetch('/api/sales');
-            const data = await r.json();
-
-            function fill(id, obj){
-                const el = document.getElementById(id);
-                let html = "";
-                Object.entries(obj).forEach(([k,v]) => html += `<tr><td>${k}</td><td>${v}</td></tr>`);
-                if(!html) html = "<tr><td>—</td><td>0</td></tr>";
-                el.innerHTML = html;
-            }
-            fill('hot_tbl', data.hot || {});
-            fill('cold_tbl', data.cold || {});
-            const b = document.getElementById('book_tbl');
-            b.innerHTML = (data.bookings||[]).map(x => `<tr><td>${x.name}</td><td>${x.time}</td><td>${x.guests}</td></tr>`).join('') || "<tr><td>—</td><td></td><td></td></tr>";
-
-            let today = cutToNow(data.hourly.labels, data.hourly.hot, data.hourly.cold);
-            let prev = {labels: data.hourly_prev.labels, hot: data.hourly_prev.hot, cold: data.hourly_prev.cold};
-
-            const ctx = document.getElementById('chart').getContext('2d');
-            if(chart) chart.destroy();
-            chart = new Chart(ctx,{
-                type:'line',
-                data:{
-                    labels: data.hourly.labels,
-                    datasets:[
-                        {label:'Гарячий', data:today.hot, borderColor:'#ff8800', backgroundColor:'#ff8800', tension:0.25, fill:false},
-                        {label:'Холодний', data:today.cold, borderColor:'#33b5ff', backgroundColor:'#33b5ff', tension:0.25, fill:false},
-                        {label:'Гарячий (мин. тижд.)', data:prev.hot, borderColor:'#ff8800', borderDash:[6,4], tension:0.25, fill:false},
-                        {label:'Холодний (мин. тижд.)', data:prev.cold, borderColor:'#33b5ff', borderDash:[6,4], tension:0.25, fill:false}
-                    ]
-                },
-                options:{
-                    responsive:true,
-                    plugins:{legend:{labels:{color:'#ddd'}}},
-                    scales:{
-                        x:{ticks:{color:'#bbb'}},
-                        y:{ticks:{color:'#bbb'}, beginAtZero:true}
-                    }
-                }
-            });
-        }
-        refresh(); setInterval(refresh, 60000);
-        </script>
-    </body>
-    </html>
-    """
-    return render_template_string(template)
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
