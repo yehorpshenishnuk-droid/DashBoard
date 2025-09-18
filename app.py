@@ -266,7 +266,7 @@ def index():
             .dashboard {
                 height: 100vh;
                 display: grid;
-                grid-template-columns: 1fr 1fr 1fr;
+                grid-template-columns: 1fr 1fr 1fr 1fr;
                 grid-template-rows: 1fr 1fr;
                 gap: 8px;
                 padding: 8px;
@@ -536,6 +536,14 @@ def index():
                 </div>
             </div>
             
+            <!-- Круговая диаграмма -->
+            <div class="card pie-card">
+                <h2>📊 Розподіл замовлень</h2>
+                <div class="pie-container">
+                    <canvas id="pie" width="180" height="180"></canvas>
+                </div>
+            </div>
+            
             <!-- График заказов по часам -->
             <div class="card chart-card">
                 <h2>📈 Замовлення по годинах (накопич.)</h2>
@@ -548,7 +556,7 @@ def index():
         <div class="logo">GRECO</div>
 
         <script>
-        let chart;
+        let chart, pie;
 
         function cutToNow(labels, arr) {
             const now = new Date();
@@ -585,6 +593,52 @@ def index():
                 
                 fill('hot_tbl', data.hot || {}, data.hot_prev || {}, 'hot-total');
                 fill('cold_tbl', data.cold || {}, data.cold_prev || {}, 'cold-total');
+
+                // Круговая диаграмма
+                const ctx2 = document.getElementById('pie').getContext('2d');
+                if(pie) pie.destroy();
+                
+                pie = new Chart(ctx2, {
+                    type: 'pie',
+                    data: {
+                        labels: ['Гарячий', 'Холодний', 'Бар'],
+                        datasets: [{
+                            data: [data.share.hot, data.share.cold, data.share.bar],
+                            backgroundColor: ['#ff6b35', '#00d4ff', '#a855f7'],
+                            borderColor: '#1a1a1a',
+                            borderWidth: 2
+                        }]
+                    },
+                    options: {
+                        responsive: true,
+                        maintainAspectRatio: false,
+                        plugins: {
+                            legend: {
+                                position: 'bottom',
+                                labels: {
+                                    color: '#cccccc',
+                                    font: {
+                                        size: 10
+                                    },
+                                    padding: 10,
+                                    usePointStyle: true
+                                }
+                            },
+                            tooltip: {
+                                backgroundColor: 'rgba(26, 26, 26, 0.9)',
+                                titleColor: '#ffffff',
+                                bodyColor: '#cccccc',
+                                borderColor: '#333333',
+                                borderWidth: 1,
+                                callbacks: {
+                                    label: function(context) {
+                                        return context.label + ': ' + context.parsed + '%';
+                                    }
+                                }
+                            }
+                        }
+                    }
+                });
 
                 // Линейная диаграмма
                 let today_hot = cutToNow(data.hourly.labels, data.hourly.hot);
