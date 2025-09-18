@@ -9,28 +9,29 @@ app = Flask(__name__)
 
 # ==== Конфиг ====
 ACCOUNT_NAME = "poka-net3"
-POSTER_TOKEN = os.getenv("POSTER_TOKEN")  # обязателен
+POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
+CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # опционален (бронирования)
 
-# Категории POS ID (по menu_category_id)
-HOT_CATEGORIES = {4, 13, 15, 46, 33}
+# Категории POS ID
+HOT_CATEGORIES  = {4, 13, 15, 46, 33}                 # ЧЕБУРЕКИ, М'ЯСНІ, ЯНТИКИ, ГАРЯЧІ, ПІДЕ
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 
 # Кэш
-PRODUCT_CACHE = {}            # product_id -> menu_category_id
+PRODUCT_CACHE = {}           # product_id -> menu_category_id
 PRODUCT_CACHE_TS = 0
-CACHE = {"hot": {}, "cold": {}, "hot_prev": {}, "cold_prev": {}, "hourly": {}, "hourly_prev": {}}
+CACHE = {"hot": {}, "cold": {}, "hourly": {}, "hourly_prev": {}, "bookings": []}
 CACHE_TS = 0
 
 # ===== Helpers =====
 def _get(url, **kwargs):
     r = requests.get(url, timeout=kwargs.pop("timeout", 25))
-    log_snippet = r.text[:500].replace("\n", " ")
+    log_snippet = r.text[:1500].replace("\n", " ")
     print(f"DEBUG GET {url.split('?')[0]} -> {r.status_code} : {log_snippet}", file=sys.stderr, flush=True)
     r.raise_for_status()
     return r
 
+# ===== Справочник товаров =====
 def load_products():
-    """Кэшируем соответствие product_id -> menu_category_id (на 1 час)."""
     global PRODUCT_CACHE, PRODUCT_CACHE_TS
     if PRODUCT_CACHE and time.time() - PRODUCT_CACHE_TS < 3600:
         return PRODUCT_CACHE
@@ -72,103 +73,46 @@ def load_products():
     print(f"DEBUG products cached: {len(PRODUCT_CACHE)} items", file=sys.stderr, flush=True)
     return PRODUCT_CACHE
 
-def fetch_category_names():
-    """
-    Берём имена категорий (id -> name) с dash.getCategoriesSales за сегодня.
-    """
+# ===== Сводные продажи =====
+def fetch_category_sales():
     today = date.today().strftime("%Y-%m-%d")
     url = (
         f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getCategoriesSales"
         f"?token={POSTER_TOKEN}&dateFrom={today}&dateTo={today}"
     )
-    out = {}
     try:
         resp = _get(url)
-        rows = resp.json().get("response", []) or []
-        for row in rows:
-            try:
-                cid = int(row.get("category_id", 0))
-                name = (row.get("category_name") or "").strip()
-                if cid and name:
-                    out[cid] = name
-            except Exception:
-                continue
+        rows = resp.json().get("response", [])
     except Exception as e:
-        print("ERROR fetch_category_names:", e, file=sys.stderr, flush=True)
-    return out
+        print("ERROR categories:", e, file=sys.stderr, flush=True)
+        return {"hot": {}, "cold": {}}
 
-def aggregate_categories_until(day_offset=0, until_hour=None):
-    """
-    Суммирует количество блюд по категориям ДО указанного часа (включительно).
-    Возвращает два словаря:
-      hot: {category_id: qty}, cold: {category_id: qty}
-    """
-    products = load_products()
-    target_date = (date.today() - timedelta(days=day_offset)).strftime("%Y-%m-%d")
-    if until_hour is None:
-        until_hour = datetime.now().hour
-
-    per_page = 500
-    page = 1
-    hot = {}
-    cold = {}
-
-    while True:
-        url = (
-            f"https://{ACCOUNT_NAME}.joinposter.com/api/transactions.getTransactions"
-            f"?token={POSTER_TOKEN}&date_from={target_date}&date_to={target_date}"
-            f"&per_page={per_page}&page={page}"
-        )
+    hot, cold = {}, {}
+    for row in rows:
         try:
-            resp = _get(url)
-            body = resp.json().get("response", {}) or {}
-            items = body.get("data", []) or []
-            total = int(body.get("count", 0) or 0)
-            page_info = body.get("page", {}) or {}
-            per_page_resp = int(page_info.get("per_page", per_page) or per_page)
-        except Exception as e:
-            print("ERROR aggregate_categories_until:", e, file=sys.stderr, flush=True)
-            break
+            cid = int(row.get("category_id", 0))
+            name = row.get("category_name", "").strip()
+            qty = int(float(row.get("count", 0)))
+        except Exception:
+            continue
 
-        if not items:
-            break
+        if cid in HOT_CATEGORIES:
+            hot[name] = hot.get(name, 0) + qty
+        elif cid in COLD_CATEGORIES:
+            cold[name] = cold.get(name, 0) + qty
 
-        for trx in items:
-            dt_str = trx.get("date_close")
-            try:
-                dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
-                hour = dt.hour
-                if hour > until_hour:
-                    continue
-            except Exception:
-                continue
+    hot = dict(sorted(hot.items(), key=lambda x: x[1], reverse=True))
+    cold = dict(sorted(cold.items(), key=lambda x: x[1], reverse=True))
+    return {"hot": hot, "cold": cold}
 
-            for p in trx.get("products", []) or []:
-                try:
-                    pid = int(p.get("product_id", 0))
-                    qty = int(float(p.get("num", 0)))
-                except Exception:
-                    continue
-                cid = products.get(pid, 0)
-                if cid in HOT_CATEGORIES:
-                    hot[cid] = hot.get(cid, 0) + qty
-                elif cid in COLD_CATEGORIES:
-                    cold[cid] = cold.get(cid, 0) + qty
-
-        if per_page_resp * page >= total:
-            break
-        page += 1
-
-    return hot, cold
-
+# ===== Почасовая диаграмма =====
 def fetch_transactions_hourly(day_offset=0):
-    """Кумулятив по часам для графика."""
     products = load_products()
     target_date = (date.today() - timedelta(days=day_offset)).strftime("%Y-%m-%d")
 
     per_page = 500
     page = 1
-    hours = list(range(10, 23))   # 10:00–22:00
+    hours = list(range(10, 23))   # фиксированный диапазон 10:00–22:00
     hot_by_hour = [0] * len(hours)
     cold_by_hour = [0] * len(hours)
 
@@ -180,13 +124,13 @@ def fetch_transactions_hourly(day_offset=0):
         )
         try:
             resp = _get(url)
-            body = resp.json().get("response", {}) or {}
+            body = resp.json().get("response", {})
             items = body.get("data", []) or []
-            total = int(body.get("count", 0) or 0)
+            total = int(body.get("count", 0))
             page_info = body.get("page", {}) or {}
             per_page_resp = int(page_info.get("per_page", per_page) or per_page)
         except Exception as e:
-            print("ERROR fetch_transactions_hourly:", e, file=sys.stderr, flush=True)
+            print("ERROR transactions:", e, file=sys.stderr, flush=True)
             break
 
         if not items:
@@ -223,48 +167,64 @@ def fetch_transactions_hourly(day_offset=0):
     th, tc = 0, 0
     for h, c in zip(hot_by_hour, cold_by_hour):
         th += h; tc += c
-        hot_cum.append(th); cold_cum.append(tc)
+        hot_cum.append(th)
+        cold_cum.append(tc)
 
     labels = [f"{h:02d}:00" for h in hours]
     return {"labels": labels, "hot": hot_cum, "cold": cold_cum}
+
+# ===== Бронирования =====
+def fetch_bookings():
+    if not CHOICE_TOKEN:
+        return []
+    url = f"https://{ACCOUNT_NAME}.choiceqr.com/api/bookings/list"
+    headers = {"Authorization": f"Bearer {CHOICE_TOKEN}"}
+    try:
+        resp = requests.get(url, headers=headers, timeout=20)
+        data = resp.json()
+    except Exception as e:
+        print("ERROR Choice:", e, file=sys.stderr, flush=True)
+        return []
+
+    items = None
+    for key in ("items", "data", "list", "bookings", "response"):
+        v = data.get(key)
+        if isinstance(v, list):
+            items = v; break
+    if not items:
+        return []
+
+    out = []
+    for b in items[:12]:
+        name = (b.get("customer") or {}).get("name") or b.get("name") or "—"
+        guests = b.get("personCount") or b.get("persons") or b.get("guests") or "—"
+        time_str = b.get("dateTime") or b.get("bookingDt") or b.get("startDateTime") or ""
+        if isinstance(time_str, str) and len(time_str) >= 16:
+            try:
+                time_str = datetime.fromisoformat(time_str.replace("Z","+00:00")).strftime("%H:%M")
+            except Exception:
+                try:
+                    time_str = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
+                except Exception:
+                    pass
+        out.append({"name": name, "time": time_str or "—", "guests": guests})
+    return out
 
 # ===== API =====
 @app.route("/api/sales")
 def api_sales():
     global CACHE, CACHE_TS
     if time.time() - CACHE_TS > 60:
-        now_hour = datetime.now().hour
-
-        cat_names = fetch_category_names()
-
-        # таблицы
-        hot_today, cold_today = aggregate_categories_until(0, now_hour)
-        hot_prev, cold_prev = aggregate_categories_until(7, now_hour)
-
-        def ensure_all(categories, today_dict, prev_dict):
-            out_today, out_prev = {}, {}
-            for cid in categories:
-                name = cat_names.get(cid, f"Категорія {cid}")
-                out_today[name] = today_dict.get(cid, 0)
-                out_prev[name] = prev_dict.get(cid, 0)
-            return out_today, out_prev
-
-        hot_today_n, hot_prev_n = ensure_all(HOT_CATEGORIES, hot_today, hot_prev)
-        cold_today_n, cold_prev_n = ensure_all(COLD_CATEGORIES, cold_today, cold_prev)
-
-        hourly_today = fetch_transactions_hourly(0)
-        hourly_prev = fetch_transactions_hourly(7)
-
+        sums = fetch_category_sales()
+        hourly = fetch_transactions_hourly(0)
+        prev = fetch_transactions_hourly(7)
+        bookings = fetch_bookings()
         CACHE.update({
-            "hot": hot_today_n,
-            "cold": cold_today_n,
-            "hot_prev": hot_prev_n,
-            "cold_prev": cold_prev_n,
-            "hourly": hourly_today,
-            "hourly_prev": hourly_prev
+            "hot": sums["hot"], "cold": sums["cold"],
+            "hourly": hourly, "hourly_prev": prev,
+            "bookings": bookings
         })
         CACHE_TS = time.time()
-
     return jsonify(CACHE)
 
 # ===== UI =====
@@ -274,77 +234,101 @@ def index():
     <html>
     <head>
         <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1" />
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <style>
-            body{margin:0;background:#0f0f0f;color:#eee;font-family:Inter,Arial,sans-serif}
-            .wrap{height:100vh;max-width:1920px;margin:0 auto;padding:10px;display:grid;grid-template-rows:auto 1fr;gap:10px}
-            .top{display:grid;grid-template-columns:1fr 1fr;gap:10px}
-            .card{background:#151515;border-radius:10px;padding:10px}
-            h2{font-size:18px;margin:0 0 6px 0}
-            table{width:100%;border-collapse:collapse;font-size:16px}
-            th,td{padding:3px 6px;text-align:right}
-            th:first-child,td:first-child{text-align:left}
-            td.today{font-weight:800;color:#fff}
-            td.prev{color:#8a8f98;font-weight:600}
-            .chart-card{display:flex;flex-direction:column}
-            .chart-wrap{flex:1}
-            canvas{width:100%;height:100%}
-            .logo{position:fixed;right:12px;bottom:8px;font-weight:800;font-size:14px}
+            :root {
+                --bg:#0f0f0f; --panel:#151515; --fg:#eee;
+                --hot:#ff8800; --cold:#33b5ff;
+            }
+            body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif}
+            .wrap{padding:18px;max-width:1600px;margin:0 auto}
+            .row{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+            .card{background:var(--panel);border-radius:14px;padding:14px 16px;}
+            .card.chart{grid-column:1/-1;}
+            table{width:100%;border-collapse:collapse;font-size:18px}
+            td{padding:4px 2px} td:last-child{text-align:right}
+            .logo{position:fixed;right:18px;bottom:12px;font-weight:800}
         </style>
     </head>
     <body>
         <div class="wrap">
-            <div class="top">
-                <div class="card">
-                    <h2>🔥 Гарячий цех</h2>
-                    <table id="hot_tbl"><thead><tr><th>Категорія</th><th>Сьогодні</th><th>Мин. тиждень</th></tr></thead><tbody></tbody></table>
-                </div>
-                <div class="card">
-                    <h2>❄️ Холодний цех</h2>
-                    <table id="cold_tbl"><thead><tr><th>Категорія</th><th>Сьогодні</th><th>Мин. тиждень</th></tr></thead><tbody></tbody></table>
-                </div>
-            </div>
-            <div class="card chart-card">
-                <h2>📊 Замовлення по годинах (накопич.)</h2>
-                <div class="chart-wrap"><canvas id="chart"></canvas></div>
+            <div class="row">
+                <div class="card hot"><h2>🔥 Гарячий цех</h2><table id="hot_tbl"></table></div>
+                <div class="card cold"><h2>❄️ Холодний цех</h2><table id="cold_tbl"></table></div>
+                <div class="card book"><h2>📅 Бронювання</h2><table id="book_tbl"></table></div>
+                <div class="card chart"><h2>📊 Замовлення по годинах (накопич.)</h2><canvas id="chart" height="160"></canvas></div>
             </div>
         </div>
-        <div class="logo">GRECO Tech ™</div>
+        <div class="logo">GRECO</div>
 
         <script>
         let chart;
-        function cutToNow(labels, hot, cold){
-            const now=new Date();const h=now.getHours();
-            let idx=labels.findIndex(l=>parseInt(l)>h);
-            if(idx===-1) idx=labels.length;
-            return {labels:labels.slice(0,idx),hot:hot.slice(0,idx),cold:cold.slice(0,idx)};
-        }
-        async function refresh(){
-            const r=await fetch('/api/sales');const d=await r.json();
-            function fill(id,today,prev){
-                const tb=document.querySelector("#"+id+" tbody");
-                let html="";
-                Object.keys(today).forEach(cat=>{
-                    html+=`<tr><td>${cat}</td><td class="today">${today[cat]}</td><td class="prev">${prev[cat]}</td></tr>`;
-                });
-                tb.innerHTML=html;
+        function cutToNow(labels, arrHot, arrCold){
+            const now = new Date();
+            const curHour = now.getHours();
+            let cutIndex = labels.findIndex(l => parseInt(l) > curHour);
+            if(cutIndex === -1) cutIndex = labels.length;
+            return {
+                labels: labels.slice(0, cutIndex),
+                hot: arrHot.slice(0, cutIndex),
+                cold: arrCold.slice(0, cutIndex)
             }
-            fill('hot_tbl',d.hot,d.hot_prev); fill('cold_tbl',d.cold,d.cold_prev);
-
-            const today=cutToNow(d.hourly.labels,d.hourly.hot,d.hourly.cold);
-            const prev={labels:d.hourly_prev.labels,hot:d.hourly_prev.hot,cold:d.hourly_prev.cold};
-
-            const ctx=document.getElementById('chart').getContext('2d');
-            if(chart) chart.destroy();
-            chart=new Chart(ctx,{type:'line',data:{labels:d.hourly.labels,datasets:[
-                {label:'Гарячий',data:today.hot,borderColor:'#ff8800',tension:0.25,fill:false},
-                {label:'Холодний',data:today.cold,borderColor:'#33b5ff',tension:0.25,fill:false},
-                {label:'Гарячий (мин. тижд.)',data:prev.hot,borderColor:'#ff8800',borderDash:[6,4],tension:0.25,fill:false},
-                {label:'Холодний (мин. тижд.)',data:prev.cold,borderColor:'#33b5ff',borderDash:[6,4],tension:0.25,fill:false}
-            ]},options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#ddd'}}},scales:{x:{ticks:{color:'#bbb'}},y:{ticks:{color:'#bbb'},beginAtZero:true}}}});
         }
-        refresh(); setInterval(refresh,60000);
+
+        async function refresh(){
+            const r = await fetch('/api/sales');
+            const data = await r.json();
+
+            function fill(id, obj){
+                const el = document.getElementById(id);
+                let html = "";
+                Object.entries(obj).forEach(([k,v]) => html += `<tr><td>${k}</td><td>${v}</td></tr>`);
+                if(!html) html = "<tr><td>—</td><td>0</td></tr>";
+                el.innerHTML = html;
+            }
+            fill('hot_tbl', data.hot || {});
+            fill('cold_tbl', data.cold || {});
+            const b = document.getElementById('book_tbl');
+            b.innerHTML = (data.bookings||[]).map(x => `<tr><td>${x.name}</td><td>${x.time}</td><td>${x.guests}</td></tr>`).join('') || "<tr><td>—</td><td></td><td></td></tr>";
+
+            // сегодняшние данные обрезаем по текущему часу
+            let today = cutToNow(data.hourly.labels, data.hourly.hot, data.hourly.cold);
+
+            // прошлую неделю показываем целиком
+            let prev = {
+                labels: data.hourly_prev.labels,
+                hot: data.hourly_prev.hot,
+                cold: data.hourly_prev.cold
+            };
+
+            const ctx = document.getElementById('chart').getContext('2d');
+            if(chart) chart.destroy();
+            chart = new Chart(ctx,{
+                type:'line',
+                data:{
+                    labels: data.hourly.labels, // ось X всегда 10–22
+                    datasets:[
+                        {label:'Гарячий', data:today.hot, borderColor:'#ff8800', backgroundColor:'#ff8800', tension:0.25, fill:false},
+                        {label:'Холодний', data:today.cold, borderColor:'#33b5ff', backgroundColor:'#33b5ff', tension:0.25, fill:false},
+                        {label:'Гарячий (мин. тижд.)', data:prev.hot, borderColor:'#ff8800', borderDash:[6,4], tension:0.25, fill:false},
+                        {label:'Холодний (мин. тижд.)', data:prev.cold, borderColor:'#33b5ff', borderDash:[6,4], tension:0.25, fill:false}
+                    ]
+                },
+                options:{
+                    responsive:true,
+                    plugins:{legend:{labels:{color:'#ddd'}}},
+                    scales:{
+                        x:{
+                            ticks:{color:'#bbb'},
+                            min:'10:00',
+                            max:'22:00'
+                        },
+                        y:{ticks:{color:'#bbb'}, beginAtZero:true}
+                    }
+                }
+            });
+        }
+        refresh(); setInterval(refresh, 60000);
         </script>
     </body>
     </html>
