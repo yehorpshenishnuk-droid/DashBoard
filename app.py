@@ -238,17 +238,18 @@ def index():
                 --hot:#ff8800; --cold:#33b5ff; --bar:#9b59b6;
             }
             body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif;overflow:hidden}
-            .wrap{padding:8px;max-width:1920px;margin:0 auto;height:100vh;display:flex;flex-direction:column}
-            .top{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;flex:0 0 40%}
-            .bottom{flex:0 0 60%;margin-top:8px}
-            .card{background:var(--panel);border-radius:10px;padding:6px 8px;height:100%}
-            table{width:100%;border-collapse:collapse;font-size:14px;line-height:1.2}
-            th,td{padding:2px 4px;text-align:right}
+            .wrap{padding:6px;max-width:1920px;margin:0 auto;height:100vh;display:flex;flex-direction:column}
+            .top{display:grid;grid-template-columns:repeat(4,1fr);gap:6px;flex:0 0 35%}
+            .bottom{flex:0 0 65%;margin-top:6px;display:flex;flex-direction:column}
+            .bottom canvas{flex:1!important;height:100%!important}
+            .card{background:var(--panel);border-radius:10px;padding:6px;height:100%}
+            table{width:100%;border-collapse:collapse;font-size:13px;line-height:1.1}
+            th,td{padding:2px 3px;text-align:right}
             th:first-child,td:first-child{text-align:left}
-            h2{font-size:16px;margin:2px 0}
-            #clock{font-size:44px!important}
+            h2{font-size:15px;margin:2px 0}
+            #clock{font-size:40px!important}
             #weather{font-size:14px!important}
-            .logo{position:fixed;right:12px;bottom:8px;font-weight:800}
+            .logo{position:fixed;right:10px;bottom:6px;font-weight:800}
         </style>
     </head>
     <body>
@@ -259,11 +260,11 @@ def index():
                 <div class="card"><h2>📊 Розподіл замовлень</h2><canvas id="pie"></canvas></div>
                 <div class="card"><h2>🕒 Час і погода</h2>
                     <div id="clock"></div>
-                    <div id="weather" style="margin-top:6px"></div>
+                    <div id="weather" style="margin-top:4px"></div>
                 </div>
             </div>
             <div class="bottom card">
-                <h2>📈 Замовлення по годинах (накопич.)</h2><canvas id="chart" style="height:100%"></canvas>
+                <h2>📈 Замовлення по годинах (накопич.)</h2><canvas id="chart"></canvas>
             </div>
         </div>
         <div class="logo">GRECO</div>
