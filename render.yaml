@@ -7,5 +7,7 @@ services:
     envVars:
       - key: POSTER_TOKEN
         sync: false
-      - key: CHOICE_TOKEN   # 🔑 добавляем сюда
+      - key: CHOICE_TOKEN
+        sync: false
+      - key: WEATHER_KEY
         sync: false
