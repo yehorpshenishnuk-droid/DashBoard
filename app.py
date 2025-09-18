@@ -8,18 +8,17 @@ from flask import Flask, render_template_string, jsonify
 app = Flask(__name__)
 
 # ==== Конфиг ====
-POSTER_ACCOUNT = os.getenv("POSTER_ACCOUNT", "poka-net3")
-CHOICE_ACCOUNT = os.getenv("CHOICE_ACCOUNT", "the-greco")
-
-POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
-CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # API key (обычный, не Bearer!)
+POSTER_ACCOUNT = os.getenv("POSTER_ACCOUNT", "poka-net3")   # для Poster
+CHOICE_ACCOUNT = os.getenv("CHOICE_ACCOUNT", "the-greco")   # для Choice
+POSTER_TOKEN = os.getenv("POSTER_TOKEN")                    # обязателен
+CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")                    # API Key (строка)
 
 # Категории POS ID
-HOT_CATEGORIES  = {4, 13, 15, 46, 33}                 # ЧЕБУРЕКИ, М'ЯСНІ, ЯНТИКИ, ГАРЯЧІ, ПІДЕ
+HOT_CATEGORIES  = {4, 13, 15, 46, 33}  # ЧЕБУРЕКИ, М'ЯСНІ, ЯНТИКИ, ГАРЯЧІ, ПІДЕ
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 
 # Кэш
-PRODUCT_CACHE = {}
+PRODUCT_CACHE = {}           # product_id -> menu_category_id
 PRODUCT_CACHE_TS = 0
 CACHE = {"hot": {}, "cold": {}, "hourly": {}, "hourly_prev": {}, "bookings": []}
 CACHE_TS = 0
@@ -175,19 +174,19 @@ def fetch_transactions_hourly(day_offset=0):
     labels = [f"{h:02d}:00" for h in hours]
     return {"labels": labels, "hot": hot_cum, "cold": cold_cum}
 
-# ===== Бронирования =====
+# ===== Бронирования (Choice) =====
 def fetch_bookings():
     if not CHOICE_TOKEN:
         return []
     today = date.today()
-    from_dt = datetime.combine(today, datetime.min.time()).isoformat() + "Z"
-    till_dt = datetime.combine(today, datetime.max.time()).isoformat() + "Z"
+    from_date = datetime.combine(today, datetime.min.time()).isoformat() + "Z"
+    till_date = datetime.combine(today, datetime.max.time()).isoformat() + "Z"
 
     url = (
         f"https://{CHOICE_ACCOUNT}.choiceqr.com/api/bookings/list"
-        f"?from={from_dt}&till={till_dt}&periodField=dateTime&page=1&perPage=20"
+        f"?from={from_date}&till={till_date}&periodField=dateTime&page=1&perPage=20"
     )
-    headers = {"X-API-KEY": CHOICE_TOKEN}
+    headers = {"X-API-KEY": CHOICE_TOKEN}  # исправлено!
     try:
         resp = requests.get(url, headers=headers, timeout=20)
         resp.raise_for_status()
@@ -200,8 +199,7 @@ def fetch_bookings():
     for key in ("items", "data", "list", "bookings", "response"):
         v = data.get(key)
         if isinstance(v, list):
-            items = v
-            break
+            items = v; break
     if not items:
         return []
 
@@ -241,7 +239,7 @@ def api_sales():
 # ===== UI =====
 @app.route("/")
 def index():
-    template = """<!DOCTYPE html>
+    template = """
     <html>
     <head>
         <meta charset="utf-8" />
@@ -303,7 +301,7 @@ def index():
             b.innerHTML = (data.bookings||[]).map(x => `<tr><td>${x.name}</td><td>${x.time}</td><td>${x.guests}</td></tr>`).join('') || "<tr><td>—</td><td></td><td></td></tr>";
 
             let today = cutToNow(data.hourly.labels, data.hourly.hot, data.hourly.cold);
-            let prev = {labels:data.hourly_prev.labels, hot:data.hourly_prev.hot, cold:data.hourly_prev.cold};
+            let prev = {labels: data.hourly_prev.labels, hot: data.hourly_prev.hot, cold: data.hourly_prev.cold};
 
             const ctx = document.getElementById('chart').getContext('2d');
             if(chart) chart.destroy();
@@ -322,11 +320,7 @@ def index():
                     responsive:true,
                     plugins:{legend:{labels:{color:'#ddd'}}},
                     scales:{
-                        x:{
-                            ticks:{color:'#bbb'},
-                            min:'10:00',
-                            max:'22:00'
-                        },
+                        x:{ticks:{color:'#bbb'}},
                         y:{ticks:{color:'#bbb'}, beginAtZero:true}
                     }
                 }
@@ -335,7 +329,8 @@ def index():
         refresh(); setInterval(refresh, 60000);
         </script>
     </body>
-    </html>"""
+    </html>
+    """
     return render_template_string(template)
 
 if __name__ == "__main__":
