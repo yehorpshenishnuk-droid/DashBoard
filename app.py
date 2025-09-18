@@ -8,16 +8,17 @@ from flask import Flask, render_template_string, jsonify
 app = Flask(__name__)
 
 # ==== Конфиг ====
-ACCOUNT_NAME = "poka-net3"  # для Poster
+ACCOUNT_NAME = "poka-net3"
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
-CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # опционален (бронирования)
+CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # обязателен для бронирований
+CHOICE_URL = "https://greco.choiceqr.com/api"
 
 # Категории POS ID
-HOT_CATEGORIES  = {4, 13, 15, 46, 33}                 # ЧЕБУРЕКИ, М'ЯСНІ, ЯНТИКИ, ГАРЯЧІ, ПІДЕ
+HOT_CATEGORIES  = {4, 13, 15, 46, 33}
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 
 # Кэш
-PRODUCT_CACHE = {}           # product_id -> menu_category_id
+PRODUCT_CACHE = {}
 PRODUCT_CACHE_TS = 0
 CACHE = {"hot": {}, "cold": {}, "hourly": {}, "hourly_prev": {}, "bookings": []}
 CACHE_TS = 0
@@ -29,6 +30,31 @@ def _get(url, **kwargs):
     print(f"DEBUG GET {url.split('?')[0]} -> {r.status_code} : {log_snippet}", file=sys.stderr, flush=True)
     r.raise_for_status()
     return r
+
+def rate_limited_get(url, headers=None, params=None, timeout=20):
+    """GET с учётом rate limit 1 запрос / 10 сек"""
+    try:
+        r = requests.get(url, headers=headers, params=params, timeout=timeout)
+        if r.status_code == 429:
+            print("DEBUG rate limit hit, retry in 10s", file=sys.stderr, flush=True)
+            time.sleep(10)
+            return rate_limited_get(url, headers=headers, params=params, timeout=timeout)
+        r.raise_for_status()
+        return r
+    except Exception as e:
+        print("ERROR Choice fetch:", e, file=sys.stderr, flush=True)
+        return None
+
+# ===== Локализация статусов =====
+STATUS_TRANSLATE = {
+    "CREATED": "Створено",
+    "CONFIRMED": "Підтверджено",
+    "EXTERNAL_CANCELLING": "Скасування (зовн.)",
+    "CANCELLED": "Скасовано",
+    "IN_PROGRESS": "В процесі",
+    "NOT_CAME": "Не прийшов",
+    "COMPLETED": "Завершено"
+}
 
 # ===== Справочник товаров =====
 def load_products():
@@ -177,42 +203,52 @@ def fetch_transactions_hourly(day_offset=0):
 def fetch_bookings():
     if not CHOICE_TOKEN:
         return []
-    url = "https://greco.choiceqr.com/api/bookings/list"
+
+    today = date.today()
+    start = datetime.combine(today, datetime.min.time())
+    end = datetime.combine(today, datetime.max.time())
+
+    params = {
+        "from": start.isoformat() + "Z",
+        "till": end.isoformat() + "Z",
+        "periodField": "dateTime",
+        "page": 1,
+        "perPage": 20
+    }
+    url = f"{CHOICE_URL}/bookings/list"
     headers = {"Authorization": f"Bearer {CHOICE_TOKEN}"}
-    try:
-        resp = requests.get(url, headers=headers, timeout=20)
-        data = resp.json()
-        print("DEBUG Choice API response:", data, file=sys.stderr, flush=True)
-    except Exception as e:
-        print("ERROR Choice:", e, file=sys.stderr, flush=True)
+
+    resp = rate_limited_get(url, headers=headers, params=params)
+    if not resp:
         return []
 
-    items = None
-    if isinstance(data, list):
-        items = data
-    else:
-        for key in ("items", "data", "list", "bookings", "response"):
-            v = data.get(key)
-            if isinstance(v, list):
-                items = v
-                break
+    try:
+        data = resp.json()
+    except Exception as e:
+        print("ERROR parse Choice:", e, file=sys.stderr, flush=True)
+        return []
+
+    items = data if isinstance(data, list) else data.get("items") or data.get("data") or []
     if not items:
         return []
 
     out = []
     for b in items[:12]:
-        name = (b.get("customer") or {}).get("name") or b.get("name") or "—"
-        guests = b.get("personCount") or b.get("persons") or b.get("guests") or "—"
-        time_val = b.get("dateTime") or b.get("bookingDt") or b.get("startDateTime") or ""
-        if isinstance(time_val, str) and len(time_val) >= 16:
-            try:
-                time_val = datetime.fromisoformat(time_val.replace("Z","+00:00")).strftime("%H:%M")
-            except Exception:
+        try:
+            name = (b.get("customer") or {}).get("name") or "—"
+            guests = b.get("personCount") or "—"
+            status = b.get("status") or "—"
+            status_disp = STATUS_TRANSLATE.get(status, status)
+            dt_raw = b.get("dateTime")
+            time_str = "—"
+            if isinstance(dt_raw, str) and len(dt_raw) >= 16:
                 try:
-                    time_val = datetime.strptime(time_val, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
+                    time_str = datetime.fromisoformat(dt_raw.replace("Z","+00:00")).strftime("%H:%M")
                 except Exception:
                     pass
-        out.append({"name": name, "time": time_val or "—", "guests": guests})
+            out.append({"name": name, "time": time_str, "guests": guests, "status": status_disp})
+        except Exception:
+            continue
     return out
 
 # ===== API =====
@@ -294,11 +330,9 @@ def index():
             fill('hot_tbl', data.hot || {});
             fill('cold_tbl', data.cold || {});
             const b = document.getElementById('book_tbl');
-            b.innerHTML = (data.bookings||[]).map(x => `<tr><td>${x.name}</td><td>${x.time}</td><td>${x.guests}</td></tr>`).join('') || "<tr><td>—</td><td></td><td></td></tr>";
+            b.innerHTML = (data.bookings||[]).map(x => `<tr><td>${x.name}</td><td>${x.time}</td><td>${x.guests}</td><td>${x.status}</td></tr>`).join('') || "<tr><td>—</td><td></td><td></td><td></td></tr>";
 
-            // текущий день обрезаем
             let today = cutToNow(data.hourly.labels, data.hourly.hot, data.hourly.cold);
-            // прошлую неделю показываем полностью
             let prev = {
                 labels: data.hourly_prev.labels,
                 hot: data.hourly_prev.hot,
@@ -310,7 +344,7 @@ def index():
             chart = new Chart(ctx,{
                 type:'line',
                 data:{
-                    labels: data.hourly.labels, // полный диапазон 10–22
+                    labels: data.hourly.labels,
                     datasets:[
                         {label:'Гарячий', data:today.hot, borderColor:'#ff8800', backgroundColor:'#ff8800', tension:0.25, fill:false},
                         {label:'Холодний', data:today.cold, borderColor:'#33b5ff', backgroundColor:'#33b5ff', tension:0.25, fill:false},
@@ -322,11 +356,7 @@ def index():
                     responsive:true,
                     plugins:{legend:{labels:{color:'#ddd'}}},
                     scales:{
-                        x:{
-                            ticks:{color:'#bbb'},
-                            min:'10:00',
-                            max:'22:00'
-                        },
+                        x:{ticks:{color:'#bbb'}, min:'10:00', max:'22:00'},
                         y:{ticks:{color:'#bbb'}, beginAtZero:true}
                     }
                 }
