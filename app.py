@@ -238,14 +238,17 @@ def index():
                 --hot:#ff8800; --cold:#33b5ff; --bar:#9b59b6;
             }
             body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif;overflow:hidden}
-            .wrap{padding:10px;max-width:1920px;margin:0 auto;height:100vh;display:flex;flex-direction:column}
-            .top{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;flex:0 0 40%}
-            .bottom{flex:1;margin-top:10px}
-            .card{background:var(--panel);border-radius:12px;padding:10px 14px;height:100%}
-            table{width:100%;border-collapse:collapse;font-size:18px}
-            th,td{padding:3px 6px;text-align:right}
+            .wrap{padding:8px;max-width:1920px;margin:0 auto;height:100vh;display:flex;flex-direction:column}
+            .top{display:grid;grid-template-columns:repeat(4,1fr);gap:8px;flex:0 0 40%}
+            .bottom{flex:0 0 60%;margin-top:8px}
+            .card{background:var(--panel);border-radius:10px;padding:6px 8px;height:100%}
+            table{width:100%;border-collapse:collapse;font-size:14px;line-height:1.2}
+            th,td{padding:2px 4px;text-align:right}
             th:first-child,td:first-child{text-align:left}
-            .logo{position:fixed;right:18px;bottom:12px;font-weight:800}
+            h2{font-size:16px;margin:2px 0}
+            #clock{font-size:44px!important}
+            #weather{font-size:14px!important}
+            .logo{position:fixed;right:12px;bottom:8px;font-weight:800}
         </style>
     </head>
     <body>
@@ -255,8 +258,8 @@ def index():
                 <div class="card"><h2>❄️ Холодний цех</h2><table id="cold_tbl"></table></div>
                 <div class="card"><h2>📊 Розподіл замовлень</h2><canvas id="pie"></canvas></div>
                 <div class="card"><h2>🕒 Час і погода</h2>
-                    <div id="clock" style="font-size:64px;margin-top:10px"></div>
-                    <div id="weather" style="margin-top:10px;font-size:22px"></div>
+                    <div id="clock"></div>
+                    <div id="weather" style="margin-top:6px"></div>
                 </div>
             </div>
             <div class="bottom card">
@@ -292,7 +295,7 @@ def index():
             fill('hot_tbl', data.hot||{}, data.hot_prev||{});
             fill('cold_tbl', data.cold||{}, data.cold_prev||{});
 
-            // Круговая диаграмма (без легенды, подписи внутри)
+            // Круговая диаграмма
             const ctx2 = document.getElementById('pie').getContext('2d');
             if(pie) pie.destroy();
             pie = new Chart(ctx2,{
@@ -309,7 +312,7 @@ def index():
                         legend:{display:false},
                         datalabels:{
                             color:'#fff',
-                            font:{weight:'bold',size:18},
+                            font:{weight:'bold',size:14},
                             formatter:(val,ctx)=>{
                                 let label = ctx.chart.data.labels[ctx.dataIndex];
                                 return label + "\\n" + val + '%';
