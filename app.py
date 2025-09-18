@@ -8,12 +8,14 @@ from flask import Flask, render_template_string, jsonify
 app = Flask(__name__)
 
 # ==== Конфиг ====
-ACCOUNT_NAME = "poka-net3"
+POSTER_ACCOUNT = os.getenv("POSTER_ACCOUNT", "poka-net3")
+CHOICE_ACCOUNT = os.getenv("CHOICE_ACCOUNT", "the-greco")
+
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
-CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # опционален (бронирования)
+CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # API key (обычный, не Bearer!)
 
 # Категории POS ID
-HOT_CATEGORIES  = {4, 13, 15, 46, 33}   # ЧЕБУРЕКИ, М'ЯСНІ, ЯНТИКИ, ГАРЯЧІ, ПІДЕ
+HOT_CATEGORIES  = {4, 13, 15, 46, 33}                 # ЧЕБУРЕКИ, М'ЯСНІ, ЯНТИКИ, ГАРЯЧІ, ПІДЕ
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 
 # Кэш
@@ -42,7 +44,7 @@ def load_products():
         page = 1
         while True:
             url = (
-                f"https://{ACCOUNT_NAME}.joinposter.com/api/menu.getProducts"
+                f"https://{POSTER_ACCOUNT}.joinposter.com/api/menu.getProducts"
                 f"?token={POSTER_TOKEN}&type={ptype}&per_page={per_page}&page={page}"
             )
             try:
@@ -77,7 +79,7 @@ def load_products():
 def fetch_category_sales():
     today = date.today().strftime("%Y-%m-%d")
     url = (
-        f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getCategoriesSales"
+        f"https://{POSTER_ACCOUNT}.joinposter.com/api/dash.getCategoriesSales"
         f"?token={POSTER_TOKEN}&dateFrom={today}&dateTo={today}"
     )
     try:
@@ -118,7 +120,7 @@ def fetch_transactions_hourly(day_offset=0):
 
     while True:
         url = (
-            f"https://{ACCOUNT_NAME}.joinposter.com/api/transactions.getTransactions"
+            f"https://{POSTER_ACCOUNT}.joinposter.com/api/transactions.getTransactions"
             f"?token={POSTER_TOKEN}&date_from={target_date}&date_to={target_date}"
             f"&per_page={per_page}&page={page}"
         )
@@ -177,13 +179,19 @@ def fetch_transactions_hourly(day_offset=0):
 def fetch_bookings():
     if not CHOICE_TOKEN:
         return []
-    url = f"https://{ACCOUNT_NAME}.choiceqr.com/api/bookings/list"
-    headers = {"Authorization": CHOICE_TOKEN}  # без Bearer
+    today = date.today()
+    from_dt = datetime.combine(today, datetime.min.time()).isoformat() + "Z"
+    till_dt = datetime.combine(today, datetime.max.time()).isoformat() + "Z"
+
+    url = (
+        f"https://{CHOICE_ACCOUNT}.choiceqr.com/api/bookings/list"
+        f"?from={from_dt}&till={till_dt}&periodField=dateTime&page=1&perPage=20"
+    )
+    headers = {"X-API-KEY": CHOICE_TOKEN}
     try:
         resp = requests.get(url, headers=headers, timeout=20)
         resp.raise_for_status()
         data = resp.json()
-        print("DEBUG Choice API response:", data, file=sys.stderr, flush=True)
     except Exception as e:
         print("ERROR Choice fetch:", e, file=sys.stderr, flush=True)
         return []
@@ -233,7 +241,7 @@ def api_sales():
 # ===== UI =====
 @app.route("/")
 def index():
-    template = """
+    template = """<!DOCTYPE html>
     <html>
     <head>
         <meta charset="utf-8" />
@@ -295,7 +303,7 @@ def index():
             b.innerHTML = (data.bookings||[]).map(x => `<tr><td>${x.name}</td><td>${x.time}</td><td>${x.guests}</td></tr>`).join('') || "<tr><td>—</td><td></td><td></td></tr>";
 
             let today = cutToNow(data.hourly.labels, data.hourly.hot, data.hourly.cold);
-            let prev = {labels: data.hourly_prev.labels, hot: data.hourly_prev.hot, cold: data.hourly_prev.cold};
+            let prev = {labels:data.hourly_prev.labels, hot:data.hourly_prev.hot, cold:data.hourly_prev.cold};
 
             const ctx = document.getElementById('chart').getContext('2d');
             if(chart) chart.destroy();
@@ -314,7 +322,11 @@ def index():
                     responsive:true,
                     plugins:{legend:{labels:{color:'#ddd'}}},
                     scales:{
-                        x:{ticks:{color:'#bbb'}, min:'10:00', max:'22:00'},
+                        x:{
+                            ticks:{color:'#bbb'},
+                            min:'10:00',
+                            max:'22:00'
+                        },
                         y:{ticks:{color:'#bbb'}, beginAtZero:true}
                     }
                 }
@@ -323,8 +335,7 @@ def index():
         refresh(); setInterval(refresh, 60000);
         </script>
     </body>
-    </html>
-    """
+    </html>"""
     return render_template_string(template)
 
 if __name__ == "__main__":
