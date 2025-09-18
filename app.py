@@ -10,6 +10,10 @@ app = Flask(__name__)
 # ==== Конфиг ====
 ACCOUNT_NAME = "poka-net3"
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")  # обязательный
+OPENWEATHER_KEY = "8691b318dac1b04215b2271ae720310"
+
+# Координаты Софиевская Борщаговка
+LAT, LON = 50.395, 30.355
 
 # Категории POS ID
 HOT_CATEGORIES = {4, 13, 15, 46, 33}                      # 🔥 Гарячий цех
@@ -19,11 +23,7 @@ BAR_CATEGORIES  = {9, 14, 27, 28, 34, 41, 42, 47, 22, 24, 25, 26, 39, 30}  # �
 # Кэш
 PRODUCT_CACHE = {}
 PRODUCT_CACHE_TS = 0
-CACHE = {
-    "hot": {}, "cold": {}, "bar": {},
-    "hot_prev": {}, "cold_prev": {},
-    "shares": {}, "hourly": {}, "hourly_prev": {},
-}
+CACHE = {}
 CACHE_TS = 0
 
 
@@ -163,6 +163,20 @@ def fetch_transactions_hourly(day_offset=0):
     return {"labels": labels, "hot": hot_cum, "cold": cold_cum}
 
 
+# ===== Погода =====
+def fetch_weather():
+    try:
+        url = f"https://api.openweathermap.org/data/2.5/weather?lat={LAT}&lon={LON}&appid={OPENWEATHER_KEY}&units=metric&lang=ua"
+        resp = requests.get(url, timeout=15)
+        data = resp.json()
+        temp = round(data["main"]["temp"])
+        desc = data["weather"][0]["description"].capitalize()
+        icon = data["weather"][0]["icon"]
+        return {"temp": temp, "desc": desc, "icon": icon}
+    except Exception:
+        return {"temp": "—", "desc": "Н/Д", "icon": "01d"}
+
+
 # ===== API =====
 @app.route("/api/sales")
 def api_sales():
@@ -186,11 +200,14 @@ def api_sales():
             }
         hourly = fetch_transactions_hourly(0)
         prev = fetch_transactions_hourly(7)
-        CACHE.update({
+        weather = fetch_weather()
+
+        CACHE = {
             "hot": sums_today["hot"], "cold": sums_today["cold"], "bar": sums_today["bar"],
             "hot_prev": sums_prev["hot"], "cold_prev": sums_prev["cold"],
             "shares": shares, "hourly": hourly, "hourly_prev": prev,
-        })
+            "weather": weather
+        }
         CACHE_TS = time.time()
     return jsonify(CACHE)
 
@@ -210,16 +227,21 @@ def index():
                 --hot:#ff8800; --cold:#33b5ff; --bar:#9b59b6;
             }
             body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif;font-size:14px}
-            .wrap{padding:10px;max-width:100%;margin:0 auto;height:100vh;display:grid;grid-template-rows:40% 60%;gap:10px}
-            .top{display:grid;grid-template-columns:1fr 1fr 0.8fr;gap:10px}
+            .wrap{padding:10px;max-width:100%;margin:0 auto;height:100vh;display:grid;grid-template-rows:45% 55%;gap:10px}
+            .top{display:grid;grid-template-columns:1fr 1fr 0.7fr 0.6fr;gap:10px}
             .card{background:var(--panel);border-radius:10px;padding:8px 10px;overflow:hidden}
             h2{font-size:16px;margin:0 0 6px 0}
-            .table{display:grid;grid-template-columns:60% 20% 20%;gap:4px;font-size:14px}
-            .table div{padding:2px 4px}
+            .table{display:grid;grid-template-columns:65% 17% 18%;gap:2px;font-size:13px}
+            .table div{padding:1px 2px}
             .head{color:#aaa;font-weight:600;border-bottom:1px solid #333}
             .right{text-align:right}
             canvas{width:100% !important;height:100% !important}
             .logo{position:fixed;right:12px;bottom:8px;font-weight:800;font-size:12px}
+            .weather{display:flex;flex-direction:column;align-items:center;justify-content:center;height:100%;text-align:center}
+            .weather .time{font-size:22px;font-weight:600;margin-bottom:6px}
+            .weather img{width:50px;height:50px}
+            .weather .temp{font-size:20px;font-weight:600}
+            .weather .desc{font-size:14px;color:#ccc}
         </style>
     </head>
     <body>
@@ -228,6 +250,7 @@ def index():
                 <div class="card"><h2>🔥 Гарячий цех</h2><div id="hot_tbl" class="table"></div></div>
                 <div class="card"><h2>❄️ Холодний цех</h2><div id="cold_tbl" class="table"></div></div>
                 <div class="card"><h2>📊 Розподіл замовлень</h2><canvas id="pie"></canvas></div>
+                <div class="card"><h2>🕒 Час і погода</h2><div class="weather"><div class="time" id="time"></div><img id="wicon"/><div class="temp" id="wtemp"></div><div class="desc" id="wdesc"></div></div></div>
             </div>
             <div class="card"><h2>📈 Замовлення по годинах (накопич.)</h2><canvas id="chart"></canvas></div>
         </div>
@@ -248,6 +271,11 @@ def index():
             }
         }
 
+        function updateClock(){
+            const now = new Date();
+            document.getElementById("time").innerText = now.toLocaleTimeString("uk-UA", {hour:"2-digit", minute:"2-digit"});
+        }
+
         async function refresh(){
             const r = await fetch('/api/sales');
             const data = await r.json();
@@ -260,7 +288,6 @@ def index():
                 keys.forEach(k => {
                     html += `<div>${k}</div><div class='right'>${todayObj[k]||0}</div><div class='right'>${prevObj[k]||0}</div>`;
                 });
-                if(keys.size===0) html += "<div>—</div><div class='right'>0</div><div class='right'>0</div>";
                 el.innerHTML = html;
             }
             fill('hot_tbl', data.hot || {}, data.hot_prev || {});
@@ -306,12 +333,18 @@ def index():
                     maintainAspectRatio:false,
                     plugins:{legend:{labels:{color:'#ddd'}}},
                     scales:{
-                        x:{ticks:{color:'#bbb'}},
+                        x:{ticks:{color:'#bbb', autoSkip:false, maxRotation:0}},
                         y:{ticks:{color:'#bbb'},beginAtZero:true}
                     }
                 }
             });
+
+            document.getElementById("wtemp").innerText = data.weather.temp + "°C";
+            document.getElementById("wdesc").innerText = data.weather.desc;
+            document.getElementById("wicon").src = "https://openweathermap.org/img/wn/" + data.weather.icon + "@2x.png";
         }
+
+        updateClock(); setInterval(updateClock, 60000);
         refresh(); setInterval(refresh, 60000);
         </script>
     </body>
