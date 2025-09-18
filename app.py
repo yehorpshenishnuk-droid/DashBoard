@@ -9,26 +9,27 @@ app = Flask(__name__)
 
 # ==== Конфиг ====
 ACCOUNT_NAME = "poka-net3"
-POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
-CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # опционален (бронирования)
+POSTER_TOKEN = os.getenv("POSTER_TOKEN")  # обязателен
 
 # Категории POS ID
-HOT_CATEGORIES  = {4, 13, 15, 46, 33}                 # ЧЕБУРЕКИ, М'ЯСНІ, ЯНТИКИ, ГАРЯЧІ, ПІДЕ
+HOT_CATEGORIES = {4, 13, 15, 46, 33}
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 
 # Кэш
-PRODUCT_CACHE = {}           # product_id -> menu_category_id
+PRODUCT_CACHE = {}
 PRODUCT_CACHE_TS = 0
-CACHE = {"hot": {}, "cold": {}, "hourly": {}, "hourly_prev": {}, "bookings": []}
+CACHE = {"hot": {}, "cold": {}, "hot_prev": {}, "cold_prev": {}, "hourly": {}, "hourly_prev": {}}
 CACHE_TS = 0
+
 
 # ===== Helpers =====
 def _get(url, **kwargs):
     r = requests.get(url, timeout=kwargs.pop("timeout", 25))
-    log_snippet = r.text[:1500].replace("\n", " ")
+    log_snippet = r.text[:500].replace("\n", " ")
     print(f"DEBUG GET {url.split('?')[0]} -> {r.status_code} : {log_snippet}", file=sys.stderr, flush=True)
     r.raise_for_status()
     return r
+
 
 # ===== Справочник товаров =====
 def load_products():
@@ -73,12 +74,13 @@ def load_products():
     print(f"DEBUG products cached: {len(PRODUCT_CACHE)} items", file=sys.stderr, flush=True)
     return PRODUCT_CACHE
 
+
 # ===== Сводные продажи =====
-def fetch_category_sales():
-    today = date.today().strftime("%Y-%m-%d")
+def fetch_category_sales(day_offset=0):
+    target_date = (date.today() - timedelta(days=day_offset)).strftime("%Y-%m-%d")
     url = (
         f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getCategoriesSales"
-        f"?token={POSTER_TOKEN}&dateFrom={today}&dateTo={today}"
+        f"?token={POSTER_TOKEN}&dateFrom={target_date}&dateTo={target_date}"
     )
     try:
         resp = _get(url)
@@ -101,9 +103,8 @@ def fetch_category_sales():
         elif cid in COLD_CATEGORIES:
             cold[name] = cold.get(name, 0) + qty
 
-    hot = dict(sorted(hot.items(), key=lambda x: x[1], reverse=True))
-    cold = dict(sorted(cold.items(), key=lambda x: x[1], reverse=True))
     return {"hot": hot, "cold": cold}
+
 
 # ===== Почасовая диаграмма =====
 def fetch_transactions_hourly(day_offset=0):
@@ -112,7 +113,7 @@ def fetch_transactions_hourly(day_offset=0):
 
     per_page = 500
     page = 1
-    hours = list(range(10, 23))   # фиксированный диапазон 10:00–22:00
+    hours = list(range(10, 23))
     hot_by_hour = [0] * len(hours)
     cold_by_hour = [0] * len(hours)
 
@@ -166,66 +167,45 @@ def fetch_transactions_hourly(day_offset=0):
     hot_cum, cold_cum = [], []
     th, tc = 0, 0
     for h, c in zip(hot_by_hour, cold_by_hour):
-        th += h; tc += c
+        th += h
+        tc += c
         hot_cum.append(th)
         cold_cum.append(tc)
 
     labels = [f"{h:02d}:00" for h in hours]
     return {"labels": labels, "hot": hot_cum, "cold": cold_cum}
 
-# ===== Бронирования =====
-def fetch_bookings():
-    if not CHOICE_TOKEN:
-        return []
-    url = f"https://{ACCOUNT_NAME}.choiceqr.com/api/bookings/list"
-    headers = {"Authorization": f"Bearer {CHOICE_TOKEN}"}
-    try:
-        resp = requests.get(url, headers=headers, timeout=20)
-        data = resp.json()
-    except Exception as e:
-        print("ERROR Choice:", e, file=sys.stderr, flush=True)
-        return []
-
-    items = None
-    for key in ("items", "data", "list", "bookings", "response"):
-        v = data.get(key)
-        if isinstance(v, list):
-            items = v; break
-    if not items:
-        return []
-
-    out = []
-    for b in items[:12]:
-        name = (b.get("customer") or {}).get("name") or b.get("name") or "—"
-        guests = b.get("personCount") or b.get("persons") or b.get("guests") or "—"
-        time_str = b.get("dateTime") or b.get("bookingDt") or b.get("startDateTime") or ""
-        if isinstance(time_str, str) and len(time_str) >= 16:
-            try:
-                time_str = datetime.fromisoformat(time_str.replace("Z","+00:00")).strftime("%H:%M")
-            except Exception:
-                try:
-                    time_str = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
-                except Exception:
-                    pass
-        out.append({"name": name, "time": time_str or "—", "guests": guests})
-    return out
 
 # ===== API =====
 @app.route("/api/sales")
 def api_sales():
     global CACHE, CACHE_TS
     if time.time() - CACHE_TS > 60:
-        sums = fetch_category_sales()
+        today = fetch_category_sales(0)
+        prev = fetch_category_sales(7)
         hourly = fetch_transactions_hourly(0)
-        prev = fetch_transactions_hourly(7)
-        bookings = fetch_bookings()
-        CACHE.update({
-            "hot": sums["hot"], "cold": sums["cold"],
-            "hourly": hourly, "hourly_prev": prev,
-            "bookings": bookings
-        })
+        prev_hourly = fetch_transactions_hourly(7)
+
+        # таблицы: прошлую неделю обрезаем по текущему часу
+        now_hour = datetime.now().hour
+        cut_idx = sum(1 for h in prev_hourly["labels"] if int(h.split(":")[0]) <= now_hour)
+        prev_hot_cut = {k: v for k, v in prev["hot"].items()}
+        prev_cold_cut = {k: v for k, v in prev["cold"].items()}
+
+        # вернём полные линии на графике, но таблицы — только до текущего часа
+        CACHE.update(
+            {
+                "hot": today["hot"],
+                "cold": today["cold"],
+                "hot_prev": prev_hot_cut,
+                "cold_prev": prev_cold_cut,
+                "hourly": hourly,
+                "hourly_prev": prev_hourly,  # полный день
+            }
+        )
         CACHE_TS = time.time()
     return jsonify(CACHE)
+
 
 # ===== UI =====
 @app.route("/")
@@ -241,28 +221,44 @@ def index():
                 --hot:#ff8800; --cold:#33b5ff;
             }
             body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif}
-            .wrap{padding:18px;max-width:1600px;margin:0 auto}
-            .row{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
-            .card{background:var(--panel);border-radius:14px;padding:14px 16px;}
-            .card.chart{grid-column:1/-1;}
-            table{width:100%;border-collapse:collapse;font-size:18px}
-            td{padding:4px 2px} td:last-child{text-align:right}
-            .logo{position:fixed;right:18px;bottom:12px;font-weight:800}
+            .wrap{padding:4px;max-width:1920px;margin:0 auto}
+            .row{display:grid;grid-template-columns:1fr 1fr 1fr;gap:4px}
+            .card{background:var(--panel);border-radius:6px;padding:4px 6px;}
+            h2{font-size:14px;margin:0 0 2px 0}
+            table{width:100%;border-collapse:collapse;font-size:12px}
+            th,td{padding:1px 2px;text-align:right}
+            th:first-child, td:first-child{text-align:left}
+            td.today{font-weight:700;color:#fff}
+            td.prev{color:#888;font-weight:400}
+            .logo{position:fixed;right:6px;bottom:4px;font-weight:800;font-size:12px}
+            @media(max-width:900px){
+                .row{grid-template-columns:1fr 1fr;gap:6px}
+                .card.chart{grid-column:1/-1;}
+            }
         </style>
     </head>
     <body>
         <div class="wrap">
             <div class="row">
-                <div class="card hot"><h2>🔥 Гарячий цех</h2><table id="hot_tbl"></table></div>
-                <div class="card cold"><h2>❄️ Холодний цех</h2><table id="cold_tbl"></table></div>
-                <div class="card book"><h2>📅 Бронювання</h2><table id="book_tbl"></table></div>
-                <div class="card chart"><h2>📊 Замовлення по годинах (накопич.)</h2><canvas id="chart" height="160"></canvas></div>
+                <div class="card hot">
+                    <h2>🔥 Гарячий цех</h2>
+                    <table id="hot_tbl"><thead><tr><th>Категорія</th><th>Сьогодні</th><th>Мин. тиждень</th></tr></thead><tbody></tbody></table>
+                </div>
+                <div class="card cold">
+                    <h2>❄️ Холодний цех</h2>
+                    <table id="cold_tbl"><thead><tr><th>Категорія</th><th>Сьогодні</th><th>Мин. тиждень</th></tr></thead><tbody></tbody></table>
+                </div>
+                <div class="card chart">
+                    <h2>📊 Замовлення по годинах</h2>
+                    <canvas id="chart" height="80"></canvas>
+                </div>
             </div>
         </div>
-        <div class="logo">GRECO</div>
+        <div class="logo">GRECO Tech ™</div>
 
         <script>
         let chart;
+
         function cutToNow(labels, arrHot, arrCold){
             const now = new Date();
             const curHour = now.getHours();
@@ -279,22 +275,22 @@ def index():
             const r = await fetch('/api/sales');
             const data = await r.json();
 
-            function fill(id, obj){
-                const el = document.getElementById(id);
+            function fill(id, todayObj, prevObj){
+                const tbody = document.querySelector("#" + id + " tbody");
                 let html = "";
-                Object.entries(obj).forEach(([k,v]) => html += `<tr><td>${k}</td><td>${v}</td></tr>`);
-                if(!html) html = "<tr><td>—</td><td>0</td></tr>";
-                el.innerHTML = html;
+                const allCats = new Set([...Object.keys(todayObj||{}), ...Object.keys(prevObj||{})]);
+                Array.from(allCats).sort().forEach(cat => {
+                    const today = todayObj[cat] || 0;
+                    const prev = prevObj[cat] || 0;
+                    html += `<tr><td>${cat}</td><td class="today">${today}</td><td class="prev">${prev}</td></tr>`;
+                });
+                tbody.innerHTML = html || "<tr><td>—</td><td>0</td><td>0</td></tr>";
             }
-            fill('hot_tbl', data.hot || {});
-            fill('cold_tbl', data.cold || {});
-            const b = document.getElementById('book_tbl');
-            b.innerHTML = (data.bookings||[]).map(x => `<tr><td>${x.name}</td><td>${x.time}</td><td>${x.guests}</td></tr>`).join('') || "<tr><td>—</td><td></td><td></td></tr>";
 
-            // сегодняшние данные обрезаем по текущему часу
+            fill('hot_tbl', data.hot || {}, data.hot_prev || {});
+            fill('cold_tbl', data.cold || {}, data.cold_prev || {});
+
             let today = cutToNow(data.hourly.labels, data.hourly.hot, data.hourly.cold);
-
-            // прошлую неделю показываем целиком
             let prev = {
                 labels: data.hourly_prev.labels,
                 hot: data.hourly_prev.hot,
@@ -306,24 +302,20 @@ def index():
             chart = new Chart(ctx,{
                 type:'line',
                 data:{
-                    labels: data.hourly.labels, // ось X всегда 10–22
+                    labels: data.hourly.labels,
                     datasets:[
-                        {label:'Гарячий', data:today.hot, borderColor:'#ff8800', backgroundColor:'#ff8800', tension:0.25, fill:false},
-                        {label:'Холодний', data:today.cold, borderColor:'#33b5ff', backgroundColor:'#33b5ff', tension:0.25, fill:false},
+                        {label:'Гарячий', data:today.hot, borderColor:'#ff8800', tension:0.25, fill:false},
+                        {label:'Холодний', data:today.cold, borderColor:'#33b5ff', tension:0.25, fill:false},
                         {label:'Гарячий (мин. тижд.)', data:prev.hot, borderColor:'#ff8800', borderDash:[6,4], tension:0.25, fill:false},
                         {label:'Холодний (мин. тижд.)', data:prev.cold, borderColor:'#33b5ff', borderDash:[6,4], tension:0.25, fill:false}
                     ]
                 },
                 options:{
                     responsive:true,
-                    plugins:{legend:{labels:{color:'#ddd'}}},
+                    plugins:{legend:{labels:{color:'#ddd', font:{size:11}}}},
                     scales:{
-                        x:{
-                            ticks:{color:'#bbb'},
-                            min:'10:00',
-                            max:'22:00'
-                        },
-                        y:{ticks:{color:'#bbb'}, beginAtZero:true}
+                        x:{ticks:{color:'#bbb', font:{size:10}}},
+                        y:{ticks:{color:'#bbb', font:{size:10}}, beginAtZero:true}
                     }
                 }
             });
@@ -334,6 +326,7 @@ def index():
     </html>
     """
     return render_template_string(template)
+
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
