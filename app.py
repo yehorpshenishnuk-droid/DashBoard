@@ -10,11 +10,10 @@ app = Flask(__name__)
 # ==== Конфиг ====
 ACCOUNT_NAME = "poka-net3"
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
-CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # обязателен для бронирований
-CHOICE_URL = "https://greco.choiceqr.com/api"
+CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # опционален (бронирования)
 
 # Категории POS ID
-HOT_CATEGORIES  = {4, 13, 15, 46, 33}
+HOT_CATEGORIES  = {4, 13, 15, 46, 33}   # ЧЕБУРЕКИ, М'ЯСНІ, ЯНТИКИ, ГАРЯЧІ, ПІДЕ
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 
 # Кэш
@@ -30,31 +29,6 @@ def _get(url, **kwargs):
     print(f"DEBUG GET {url.split('?')[0]} -> {r.status_code} : {log_snippet}", file=sys.stderr, flush=True)
     r.raise_for_status()
     return r
-
-def rate_limited_get(url, headers=None, params=None, timeout=20):
-    """GET с учётом rate limit 1 запрос / 10 сек"""
-    try:
-        r = requests.get(url, headers=headers, params=params, timeout=timeout)
-        if r.status_code == 429:
-            print("DEBUG rate limit hit, retry in 10s", file=sys.stderr, flush=True)
-            time.sleep(10)
-            return rate_limited_get(url, headers=headers, params=params, timeout=timeout)
-        r.raise_for_status()
-        return r
-    except Exception as e:
-        print("ERROR Choice fetch:", e, file=sys.stderr, flush=True)
-        return None
-
-# ===== Локализация статусов =====
-STATUS_TRANSLATE = {
-    "CREATED": "Створено",
-    "CONFIRMED": "Підтверджено",
-    "EXTERNAL_CANCELLING": "Скасування (зовн.)",
-    "CANCELLED": "Скасовано",
-    "IN_PROGRESS": "В процесі",
-    "NOT_CAME": "Не прийшов",
-    "COMPLETED": "Завершено"
-}
 
 # ===== Справочник товаров =====
 def load_products():
@@ -203,52 +177,40 @@ def fetch_transactions_hourly(day_offset=0):
 def fetch_bookings():
     if not CHOICE_TOKEN:
         return []
-
-    today = date.today()
-    start = datetime.combine(today, datetime.min.time())
-    end = datetime.combine(today, datetime.max.time())
-
-    params = {
-        "from": start.isoformat() + "Z",
-        "till": end.isoformat() + "Z",
-        "periodField": "dateTime",
-        "page": 1,
-        "perPage": 20
-    }
-    url = f"{CHOICE_URL}/bookings/list"
-    headers = {"Authorization": f"Bearer {CHOICE_TOKEN}"}
-
-    resp = rate_limited_get(url, headers=headers, params=params)
-    if not resp:
-        return []
-
+    url = f"https://{ACCOUNT_NAME}.choiceqr.com/api/bookings/list"
+    headers = {"Authorization": CHOICE_TOKEN}  # без Bearer
     try:
+        resp = requests.get(url, headers=headers, timeout=20)
+        resp.raise_for_status()
         data = resp.json()
+        print("DEBUG Choice API response:", data, file=sys.stderr, flush=True)
     except Exception as e:
-        print("ERROR parse Choice:", e, file=sys.stderr, flush=True)
+        print("ERROR Choice fetch:", e, file=sys.stderr, flush=True)
         return []
 
-    items = data if isinstance(data, list) else data.get("items") or data.get("data") or []
+    items = None
+    for key in ("items", "data", "list", "bookings", "response"):
+        v = data.get(key)
+        if isinstance(v, list):
+            items = v
+            break
     if not items:
         return []
 
     out = []
     for b in items[:12]:
-        try:
-            name = (b.get("customer") or {}).get("name") or "—"
-            guests = b.get("personCount") or "—"
-            status = b.get("status") or "—"
-            status_disp = STATUS_TRANSLATE.get(status, status)
-            dt_raw = b.get("dateTime")
-            time_str = "—"
-            if isinstance(dt_raw, str) and len(dt_raw) >= 16:
+        name = (b.get("customer") or {}).get("name") or b.get("name") or "—"
+        guests = b.get("personCount") or b.get("persons") or b.get("guests") or "—"
+        time_str = b.get("dateTime") or b.get("bookingDt") or b.get("startDateTime") or ""
+        if isinstance(time_str, str) and len(time_str) >= 16:
+            try:
+                time_str = datetime.fromisoformat(time_str.replace("Z","+00:00")).strftime("%H:%M")
+            except Exception:
                 try:
-                    time_str = datetime.fromisoformat(dt_raw.replace("Z","+00:00")).strftime("%H:%M")
+                    time_str = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
                 except Exception:
                     pass
-            out.append({"name": name, "time": time_str, "guests": guests, "status": status_disp})
-        except Exception:
-            continue
+        out.append({"name": name, "time": time_str or "—", "guests": guests})
     return out
 
 # ===== API =====
@@ -330,14 +292,10 @@ def index():
             fill('hot_tbl', data.hot || {});
             fill('cold_tbl', data.cold || {});
             const b = document.getElementById('book_tbl');
-            b.innerHTML = (data.bookings||[]).map(x => `<tr><td>${x.name}</td><td>${x.time}</td><td>${x.guests}</td><td>${x.status}</td></tr>`).join('') || "<tr><td>—</td><td></td><td></td><td></td></tr>";
+            b.innerHTML = (data.bookings||[]).map(x => `<tr><td>${x.name}</td><td>${x.time}</td><td>${x.guests}</td></tr>`).join('') || "<tr><td>—</td><td></td><td></td></tr>";
 
             let today = cutToNow(data.hourly.labels, data.hourly.hot, data.hourly.cold);
-            let prev = {
-                labels: data.hourly_prev.labels,
-                hot: data.hourly_prev.hot,
-                cold: data.hourly_prev.cold
-            };
+            let prev = {labels: data.hourly_prev.labels, hot: data.hourly_prev.hot, cold: data.hourly_prev.cold};
 
             const ctx = document.getElementById('chart').getContext('2d');
             if(chart) chart.destroy();
