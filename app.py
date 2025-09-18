@@ -10,16 +10,15 @@ app = Flask(__name__)
 # ==== Конфиг ====
 ACCOUNT_NAME = "poka-net3"
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
-CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # опционален (бронирования, но мы его убрали из UI)
 
 # Категории POS ID
-HOT_CATEGORIES  = {4, 13, 15, 46, 33}                 # ЧЕБУРЕКИ, М'ЯСНІ, ЯНТИКИ, ГАРЯЧІ, ПІДЕ
+HOT_CATEGORIES  = {4, 13, 15, 46, 33}                 
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 
 # Кэш
-PRODUCT_CACHE = {}           # product_id -> menu_category_id
+PRODUCT_CACHE = {}           
 PRODUCT_CACHE_TS = 0
-CACHE = {"hot": {}, "cold": {}, "hourly": {}, "hourly_prev": {}}  # bookings убраны
+CACHE = {"hot": {}, "cold": {}, "hot_prev": {}, "cold_prev": {}, "hourly": {}, "hourly_prev": {}}  
 CACHE_TS = 0
 
 # ===== Helpers =====
@@ -73,33 +72,63 @@ def load_products():
     print(f"DEBUG products cached: {len(PRODUCT_CACHE)} items", file=sys.stderr, flush=True)
     return PRODUCT_CACHE
 
-# ===== Сводные продажи =====
-def fetch_category_sales():
-    today = date.today().strftime("%Y-%m-%d")
-    url = (
-        f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getCategoriesSales"
-        f"?token={POSTER_TOKEN}&dateFrom={today}&dateTo={today}"
-    )
-    try:
-        resp = _get(url)
-        rows = resp.json().get("response", [])
-    except Exception as e:
-        print("ERROR categories:", e, file=sys.stderr, flush=True)
-        return {"hot": {}, "cold": {}}
+# ===== Продажи по категориям до текущего времени =====
+def fetch_category_sales_until(day_offset=0):
+    products = load_products()
+    target_date = (date.today() - timedelta(days=day_offset)).strftime("%Y-%m-%d")
 
+    per_page = 500
+    page = 1
     hot, cold = {}, {}
-    for row in rows:
-        try:
-            cid = int(row.get("category_id", 0))
-            name = row.get("category_name", "").strip()
-            qty = int(float(row.get("count", 0)))
-        except Exception:
-            continue
+    now = datetime.now()
+    max_hour = now.hour
+    max_minute = now.minute
 
-        if cid in HOT_CATEGORIES:
-            hot[name] = hot.get(name, 0) + qty
-        elif cid in COLD_CATEGORIES:
-            cold[name] = cold.get(name, 0) + qty
+    while True:
+        url = (
+            f"https://{ACCOUNT_NAME}.joinposter.com/api/transactions.getTransactions"
+            f"?token={POSTER_TOKEN}&date_from={target_date}&date_to={target_date}"
+            f"&per_page={per_page}&page={page}"
+        )
+        try:
+            resp = _get(url)
+            body = resp.json().get("response", {})
+            items = body.get("data", []) or []
+            total = int(body.get("count", 0))
+            page_info = body.get("page", {}) or {}
+            per_page_resp = int(page_info.get("per_page", per_page) or per_page)
+        except Exception as e:
+            print("ERROR category_until:", e, file=sys.stderr, flush=True)
+            break
+
+        if not items:
+            break
+
+        for trx in items:
+            dt_str = trx.get("date_close")
+            try:
+                dt = datetime.strptime(dt_str, "%Y-%m-%d %H:%M:%S")
+                if (dt.hour > max_hour) or (dt.hour == max_hour and dt.minute > max_minute):
+                    continue
+            except Exception:
+                continue
+
+            for p in trx.get("products", []) or []:
+                try:
+                    pid = int(p.get("product_id", 0))
+                    qty = int(float(p.get("num", 0)))
+                except Exception:
+                    continue
+                cid = products.get(pid, 0)
+                name = p.get("product_name", "—")
+                if cid in HOT_CATEGORIES:
+                    hot[name] = hot.get(name, 0) + qty
+                elif cid in COLD_CATEGORIES:
+                    cold[name] = cold.get(name, 0) + qty
+
+        if per_page_resp * page >= total:
+            break
+        page += 1
 
     hot = dict(sorted(hot.items(), key=lambda x: x[1], reverse=True))
     cold = dict(sorted(cold.items(), key=lambda x: x[1], reverse=True))
@@ -112,7 +141,7 @@ def fetch_transactions_hourly(day_offset=0):
 
     per_page = 500
     page = 1
-    hours = list(range(10, 23))   # фиксированный диапазон 10:00–22:00
+    hours = list(range(10, 23))   
     hot_by_hour = [0] * len(hours)
     cold_by_hour = [0] * len(hours)
 
@@ -178,11 +207,13 @@ def fetch_transactions_hourly(day_offset=0):
 def api_sales():
     global CACHE, CACHE_TS
     if time.time() - CACHE_TS > 60:
-        sums = fetch_category_sales()
+        today_cats = fetch_category_sales_until(0)
+        prev_cats  = fetch_category_sales_until(7)
         hourly = fetch_transactions_hourly(0)
         prev = fetch_transactions_hourly(7)
         CACHE.update({
-            "hot": sums["hot"], "cold": sums["cold"],
+            "hot": today_cats["hot"], "cold": today_cats["cold"],
+            "hot_prev": prev_cats["hot"], "cold_prev": prev_cats["cold"],
             "hourly": hourly, "hourly_prev": prev
         })
         CACHE_TS = time.time()
@@ -199,17 +230,17 @@ def index():
         <style>
             :root {
                 --bg:#0f0f0f; --panel:#151515; --fg:#eee;
-                --hot:#ff8800; --cold:#33b5ff; --leader:#2ecc71;
+                --hot:#ff8800; --cold:#33b5ff;
             }
             body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif}
             .wrap{padding:18px;max-width:1600px;margin:0 auto}
             .row{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
             .card{background:var(--panel);border-radius:14px;padding:14px 16px;}
             .card.chart{grid-column:1/-1;}
-            table{width:100%;border-collapse:collapse;font-size:22px}
-            td{padding:6px 4px} 
-            td:last-child{text-align:right;font-weight:600}
-            tr.leader{background:var(--leader);color:#fff}
+            table{width:100%;border-collapse:collapse;font-size:20px}
+            th, td{padding:6px 4px} 
+            th{text-align:left}
+            td:nth-child(2), td:nth-child(3){text-align:right}
             .logo{position:fixed;right:18px;bottom:12px;font-weight:800}
         </style>
     </head>
@@ -237,28 +268,27 @@ def index():
             }
         }
 
+        function fillCompare(id, today, prev){
+            const el = document.getElementById(id);
+            let html = "<tr><th>Категорія</th><th>Сьогодні</th><th>Мин. тиждень</th></tr>";
+            let keys = new Set([...Object.keys(today), ...Object.keys(prev)]);
+            keys.forEach(k => {
+                let t = today[k] || 0;
+                let p = prev[k] || 0;
+                html += `<tr><td>${k}</td><td>${t}</td><td>${p}</td></tr>`;
+            });
+            if(keys.size===0) html += "<tr><td>—</td><td>0</td><td>0</td></tr>";
+            el.innerHTML = html;
+        }
+
         async function refresh(){
             const r = await fetch('/api/sales');
             const data = await r.json();
 
-            function fill(id, obj){
-                const el = document.getElementById(id);
-                let html = "";
-                let entries = Object.entries(obj);
-                entries.forEach(([k,v], i) => {
-                    let rowClass = (i===0) ? "leader" : "";
-                    html += `<tr class="${rowClass}"><td>${k}</td><td>${v}</td></tr>`;
-                });
-                if(!html) html = "<tr><td>—</td><td>0</td></tr>";
-                el.innerHTML = html;
-            }
-            fill('hot_tbl', data.hot || {});
-            fill('cold_tbl', data.cold || {});
+            fillCompare('hot_tbl', data.hot || {}, data.hot_prev || {});
+            fillCompare('cold_tbl', data.cold || {}, data.cold_prev || {});
 
-            // сегодняшние данные обрезаем по текущему часу
             let today = cutToNow(data.hourly.labels, data.hourly.hot, data.hourly.cold);
-
-            // прошлую неделю показываем целиком
             let prev = {
                 labels: data.hourly_prev.labels,
                 hot: data.hourly_prev.hot,
@@ -270,7 +300,7 @@ def index():
             chart = new Chart(ctx,{
                 type:'line',
                 data:{
-                    labels: data.hourly.labels, // ось X всегда 10–22
+                    labels: data.hourly.labels, 
                     datasets:[
                         {label:'Гарячий', data:today.hot, borderColor:'#ff8800', backgroundColor:'#ff8800', borderWidth:3, tension:0.25, fill:false},
                         {label:'Холодний', data:today.cold, borderColor:'#33b5ff', backgroundColor:'#33b5ff', borderWidth:3, tension:0.25, fill:false},
@@ -282,11 +312,7 @@ def index():
                     responsive:true,
                     plugins:{legend:{labels:{color:'#ddd', font:{size:16}}}},
                     scales:{
-                        x:{
-                            ticks:{color:'#bbb', font:{size:14}},
-                            min:'10:00',
-                            max:'22:00'
-                        },
+                        x:{ticks:{color:'#bbb', font:{size:14}}, min:'10:00', max:'22:00'},
                         y:{ticks:{color:'#bbb', font:{size:14}}, beginAtZero:true}
                     }
                 }
