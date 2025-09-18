@@ -291,8 +291,15 @@ def index():
             const b = document.getElementById('book_tbl');
             b.innerHTML = (data.bookings||[]).map(x => `<tr><td>${x.name}</td><td>${x.time}</td><td>${x.guests}</td></tr>`).join('') || "<tr><td>—</td><td></td><td></td></tr>";
 
+            // сегодняшние данные обрезаем по текущему часу
             let today = cutToNow(data.hourly.labels, data.hourly.hot, data.hourly.cold);
-            let prev = cutToNow(data.hourly_prev.labels, data.hourly_prev.hot, data.hourly_prev.cold);
+
+            // прошлую неделю показываем целиком
+            let prev = {
+                labels: data.hourly_prev.labels,
+                hot: data.hourly_prev.hot,
+                cold: data.hourly_prev.cold
+            };
 
             const ctx = document.getElementById('chart').getContext('2d');
             if(chart) chart.destroy();
