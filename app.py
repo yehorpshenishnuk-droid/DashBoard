@@ -237,7 +237,7 @@ def index():
                 --bg:#0f0f0f; --panel:#151515; --fg:#eee;
                 --hot:#ff8800; --cold:#33b5ff; --bar:#9b59b6;
             }
-            body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif}
+            body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif;overflow:hidden}
             .wrap{padding:10px;max-width:1920px;margin:0 auto;height:100vh;display:flex;flex-direction:column}
             .top{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;flex:0 0 40%}
             .bottom{flex:1;margin-top:10px}
@@ -292,7 +292,7 @@ def index():
             fill('hot_tbl', data.hot||{}, data.hot_prev||{});
             fill('cold_tbl', data.cold||{}, data.cold_prev||{});
 
-            // Круговая диаграмма
+            // Круговая диаграмма (без легенды, подписи внутри)
             const ctx2 = document.getElementById('pie').getContext('2d');
             if(pie) pie.destroy();
             pie = new Chart(ctx2,{
@@ -306,11 +306,14 @@ def index():
                 },
                 options:{
                     plugins:{
-                        legend:{display:true,labels:{color:'#ddd'}},
+                        legend:{display:false},
                         datalabels:{
                             color:'#fff',
-                            font:{weight:'bold',size:16},
-                            formatter:(val)=> val+'%'
+                            font:{weight:'bold',size:18},
+                            formatter:(val,ctx)=>{
+                                let label = ctx.chart.data.labels[ctx.dataIndex];
+                                return label + "\\n" + val + '%';
+                            }
                         }
                     }
                 },
