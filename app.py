@@ -202,7 +202,7 @@ def api_sales():
         hourly = fetch_transactions_hourly(0)
         prev = fetch_transactions_hourly(7)
 
-        # Обрезаем данные прошлой недели по текущему часу
+        # Обрезаем данные прошлой недели по текущему часу (для таблиц)
         cur_hour = datetime.now().hour
         cut_idx = sum(1 for h in prev["labels"] if int(h[:2]) <= cur_hour)
         hot_prev_cut = {}
@@ -317,7 +317,7 @@ def index():
             chart = new Chart(ctx,{
                 type:'line',
                 data:{
-                    labels: today.labels, // ось X обрезана по текущему часу
+                    labels: data.hourly.labels, // ось X всегда полная 10–22
                     datasets:[
                         {label:'Гарячий', data:today.hot, borderColor:'#ff8800', tension:0.25, fill:false},
                         {label:'Холодний', data:today.cold, borderColor:'#33b5ff', tension:0.25, fill:false},
