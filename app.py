@@ -218,7 +218,7 @@ def index():
             .table div{padding:2px 4px}
             .head{color:#aaa;font-weight:600;border-bottom:1px solid #333}
             .right{text-align:right}
-            canvas{max-height:100%;max-width:100%}
+            canvas{width:100% !important;height:100% !important}
             .logo{position:fixed;right:12px;bottom:8px;font-weight:800;font-size:12px}
         </style>
     </head>
@@ -277,7 +277,7 @@ def index():
                 },
                 options:{
                     plugins:{
-                        legend:{labels:{color:'#ddd'}},
+                        legend:{display:false},
                         datalabels:{
                             color:'#fff',
                             formatter:(value, ctx)=> ctx.chart.data.labels[ctx.dataIndex] + ' ' + value + '%'
@@ -303,8 +303,12 @@ def index():
                     ]
                 },
                 options:{
+                    maintainAspectRatio:false,
                     plugins:{legend:{labels:{color:'#ddd'}}},
-                    scales:{x:{ticks:{color:'#bbb'}},y:{ticks:{color:'#bbb'},beginAtZero:true}}
+                    scales:{
+                        x:{ticks:{color:'#bbb'}},
+                        y:{ticks:{color:'#bbb'},beginAtZero:true}
+                    }
                 }
             });
         }
