@@ -9,68 +9,74 @@ app = Flask(__name__)
 
 # ==== Конфиг ====
 ACCOUNT_NAME = "poka-net3"
-POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
+POSTER_TOKEN = os.getenv("POSTER_TOKEN")
 
 # Категории POS ID
-HOT_CATEGORIES  = {4, 13, 15, 46, 33}                 
+HOT_CATEGORIES  = {4, 13, 15, 46, 33}
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 
 # Кэш
-PRODUCT_CACHE = {}           
+PRODUCT_CACHE = {}           # product_id -> menu_category_id
+CATEGORY_NAMES = {}          # category_id -> category_name
 PRODUCT_CACHE_TS = 0
-CACHE = {"hot": {}, "cold": {}, "hot_prev": {}, "cold_prev": {}, "hourly": {}, "hourly_prev": {}}  
+CACHE = {"hot": {}, "cold": {}, "hot_prev": {}, "cold_prev": {}, "hourly": {}, "hourly_prev": {}}
 CACHE_TS = 0
 
 # ===== Helpers =====
 def _get(url, **kwargs):
     r = requests.get(url, timeout=kwargs.pop("timeout", 25))
-    log_snippet = r.text[:1500].replace("\n", " ")
+    log_snippet = r.text[:500].replace("\n", " ")
     print(f"DEBUG GET {url.split('?')[0]} -> {r.status_code} : {log_snippet}", file=sys.stderr, flush=True)
     r.raise_for_status()
     return r
 
 # ===== Справочник товаров =====
 def load_products():
-    global PRODUCT_CACHE, PRODUCT_CACHE_TS
+    global PRODUCT_CACHE, PRODUCT_CACHE_TS, CATEGORY_NAMES
     if PRODUCT_CACHE and time.time() - PRODUCT_CACHE_TS < 3600:
         return PRODUCT_CACHE
 
     mapping = {}
     per_page = 500
-    for ptype in ("products", "batchtickets"):
-        page = 1
-        while True:
-            url = (
-                f"https://{ACCOUNT_NAME}.joinposter.com/api/menu.getProducts"
-                f"?token={POSTER_TOKEN}&type={ptype}&per_page={per_page}&page={page}"
-            )
+    page = 1
+    while True:
+        url = (
+            f"https://{ACCOUNT_NAME}.joinposter.com/api/menu.getProducts"
+            f"?token={POSTER_TOKEN}&type=products&per_page={per_page}&page={page}"
+        )
+        try:
+            resp = _get(url)
+            data = resp.json().get("response", [])
+        except Exception as e:
+            print("ERROR load_products:", e, file=sys.stderr, flush=True)
+            break
+
+        if not isinstance(data, list) or not data:
+            break
+
+        for item in data:
             try:
-                resp = _get(url)
-                data = resp.json().get("response", [])
-            except Exception as e:
-                print("ERROR load_products:", e, file=sys.stderr, flush=True)
-                break
+                pid = int(item.get("product_id", 0))
+                cid = int(item.get("menu_category_id", 0))
+                cname = item.get("menu_category_name", "").strip()
+                if pid and cid:
+                    mapping[pid] = cid
+                    if cname:
+                        CATEGORY_NAMES[cid] = cname
+            except Exception:
+                continue
 
-            if not isinstance(data, list) or not data:
-                break
-
-            for item in data:
-                try:
-                    pid = int(item.get("product_id", 0))
-                    cid = int(item.get("menu_category_id", 0))
-                    if pid and cid:
-                        mapping[pid] = cid
-                except Exception:
-                    continue
-
-            if len(data) < per_page:
-                break
-            page += 1
+        if len(data) < per_page:
+            break
+        page += 1
 
     PRODUCT_CACHE = mapping
     PRODUCT_CACHE_TS = time.time()
     print(f"DEBUG products cached: {len(PRODUCT_CACHE)} items", file=sys.stderr, flush=True)
     return PRODUCT_CACHE
+
+def category_name(cid):
+    return CATEGORY_NAMES.get(cid, f"Категорія {cid}")
 
 # ===== Продажи по категориям до текущего времени =====
 def fetch_category_sales_until(day_offset=0):
@@ -120,19 +126,18 @@ def fetch_category_sales_until(day_offset=0):
                 except Exception:
                     continue
                 cid = products.get(pid, 0)
-                name = p.get("product_name", "—")
                 if cid in HOT_CATEGORIES:
-                    hot[name] = hot.get(name, 0) + qty
+                    hot[cid] = hot.get(cid, 0) + qty
                 elif cid in COLD_CATEGORIES:
-                    cold[name] = cold.get(name, 0) + qty
+                    cold[cid] = cold.get(cid, 0) + qty
 
         if per_page_resp * page >= total:
             break
         page += 1
 
-    hot = dict(sorted(hot.items(), key=lambda x: x[1], reverse=True))
-    cold = dict(sorted(cold.items(), key=lambda x: x[1], reverse=True))
-    return {"hot": hot, "cold": cold}
+    hot_named = {category_name(cid): qty for cid, qty in hot.items()}
+    cold_named = {category_name(cid): qty for cid, qty in cold.items()}
+    return {"hot": hot_named, "cold": cold_named}
 
 # ===== Почасовая диаграмма =====
 def fetch_transactions_hourly(day_offset=0):
@@ -141,7 +146,7 @@ def fetch_transactions_hourly(day_offset=0):
 
     per_page = 500
     page = 1
-    hours = list(range(10, 23))   
+    hours = list(range(10, 23))
     hot_by_hour = [0] * len(hours)
     cold_by_hour = [0] * len(hours)
 
