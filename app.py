@@ -8,10 +8,10 @@ from flask import Flask, render_template_string, jsonify
 app = Flask(__name__)
 
 # ==== Конфиг ====
-ACCOUNT_NAME = "poka-net3"
-POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
-CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # опционален (бронирования)
-WEATHER_KEY = os.getenv("WEATHER_KEY", "")         # API ключ OpenWeather
+ACCOUNT_NAME = os.getenv("ACCOUNT_NAME", "poka-net3")
+POSTER_TOKEN = os.getenv("POSTER_TOKEN")
+CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")
+WEATHER_KEY = os.getenv("WEATHER_KEY", "")
 
 # Категории POS ID
 HOT_CATEGORIES  = {4, 13, 15, 46, 33}
@@ -21,7 +21,7 @@ BAR_CATEGORIES  = {9,14,27,28,34,41,42,47,22,24,25,26,39,30}
 # Кэш
 PRODUCT_CACHE = {}
 PRODUCT_CACHE_TS = 0
-CACHE = {"hot": {}, "cold": {}, "hot_prev": {}, "cold_prev": {}, "hourly": {}, "hourly_prev": {}, "share": {}}
+CACHE = {"hot": {}, "cold": {}, "bar": {}, "hot_prev": {}, "cold_prev": {}, "hourly": {}, "hourly_prev": {}, "share": {}}
 CACHE_TS = 0
 
 # ===== Helpers =====
@@ -215,7 +215,7 @@ def api_sales():
         }
 
         CACHE.update({
-            "hot": sums_today["hot"], "cold": sums_today["cold"],
+            "hot": sums_today["hot"], "cold": sums_today["cold"], "bar": sums_today["bar"],
             "hot_prev": sums_prev["hot"], "cold_prev": sums_prev["cold"],
             "hourly": hourly, "hourly_prev": prev,
             "share": share, "weather": fetch_weather()
@@ -231,34 +231,36 @@ def index():
     <head>
         <meta charset="utf-8" />
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
         <style>
             :root {
                 --bg:#0f0f0f; --panel:#151515; --fg:#eee;
                 --hot:#ff8800; --cold:#33b5ff; --bar:#9b59b6;
             }
             body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif}
-            .wrap{padding:10px;max-width:1800px;margin:0 auto}
-            .row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:10px}
-            .card{background:var(--panel);border-radius:12px;padding:10px 14px;}
-            .card.chart{grid-column:1/-1;height:420px}
-            table{width:100%;border-collapse:collapse;font-size:16px}
+            .wrap{padding:10px;max-width:1920px;margin:0 auto;height:100vh;display:flex;flex-direction:column}
+            .top{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;flex:0 0 40%}
+            .bottom{flex:1;margin-top:10px}
+            .card{background:var(--panel);border-radius:12px;padding:10px 14px;height:100%}
+            table{width:100%;border-collapse:collapse;font-size:18px}
             th,td{padding:3px 6px;text-align:right}
             th:first-child,td:first-child{text-align:left}
             .logo{position:fixed;right:18px;bottom:12px;font-weight:800}
-            canvas{max-width:100%}
         </style>
     </head>
     <body>
         <div class="wrap">
-            <div class="row">
-                <div class="card hot"><h2>🔥 Гарячий цех</h2><table id="hot_tbl"></table></div>
-                <div class="card cold"><h2>❄️ Холодний цех</h2><table id="cold_tbl"></table></div>
-                <div class="card share"><h2>📊 Розподіл замовлень</h2><canvas id="pie" height="180"></canvas></div>
-                <div class="card weather"><h2>🕒 Час і погода</h2>
-                    <div id="clock" style="font-size:32px;margin-top:10px"></div>
-                    <div id="weather" style="margin-top:10px;font-size:18px"></div>
+            <div class="top">
+                <div class="card"><h2>🔥 Гарячий цех</h2><table id="hot_tbl"></table></div>
+                <div class="card"><h2>❄️ Холодний цех</h2><table id="cold_tbl"></table></div>
+                <div class="card"><h2>📊 Розподіл замовлень</h2><canvas id="pie"></canvas></div>
+                <div class="card"><h2>🕒 Час і погода</h2>
+                    <div id="clock" style="font-size:64px;margin-top:10px"></div>
+                    <div id="weather" style="margin-top:10px;font-size:22px"></div>
                 </div>
-                <div class="card chart"><h2>📈 Замовлення по годинах (накопич.)</h2><canvas id="chart"></canvas></div>
+            </div>
+            <div class="bottom card">
+                <h2>📈 Замовлення по годинах (накопич.)</h2><canvas id="chart" style="height:100%"></canvas>
             </div>
         </div>
         <div class="logo">GRECO</div>
@@ -278,7 +280,6 @@ def index():
             const r = await fetch('/api/sales');
             const data = await r.json();
 
-            // Таблицы
             function fill(id, today, prev){
                 const el = document.getElementById(id);
                 let html = "<tr><th>Категорія</th><th>Сьогодні</th><th>Мин. тиждень</th></tr>";
@@ -297,19 +298,23 @@ def index():
             pie = new Chart(ctx2,{
                 type:'pie',
                 data:{
-                    labels:['Гарячий','Холодний','Бар'],
+                    labels:['Бар','Гор. цех','Хол. цех'],
                     datasets:[{
-                        data:[data.share.hot,data.share.cold,data.share.bar],
-                        backgroundColor:['#ff8800','#33b5ff','#9b59b6']
+                        data:[data.share.bar,data.share.hot,data.share.cold],
+                        backgroundColor:['#9b59b6','#ff8800','#33b5ff']
                     }]
                 },
                 options:{
                     plugins:{
-                        legend:{display:false},
-                        tooltip:{enabled:false},
-                        datalabels:{display:true}
+                        legend:{display:true,labels:{color:'#ddd'}},
+                        datalabels:{
+                            color:'#fff',
+                            font:{weight:'bold',size:16},
+                            formatter:(val)=> val+'%'
+                        }
                     }
-                }
+                },
+                plugins:[ChartDataLabels]
             });
 
             // Линейная диаграмма
@@ -331,6 +336,7 @@ def index():
                 },
                 options:{
                     responsive:true,
+                    maintainAspectRatio:false,
                     plugins:{legend:{labels:{color:'#ddd'}}},
                     scales:{
                         x:{ticks:{color:'#bbb'},title:{display:true,text:'Час'}},
