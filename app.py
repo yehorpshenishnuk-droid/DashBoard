@@ -41,7 +41,7 @@ def _get(url, **kwargs):
     return r
 
 
-# ===== Довідник товарів (product_id -> menu_category_id) =====
+# ===== Довідник товарів =====
 def load_products():
     global PRODUCT_CACHE, PRODUCT_CACHE_TS
     if PRODUCT_CACHE and time.time() - PRODUCT_CACHE_TS < 3600:
@@ -81,7 +81,6 @@ def load_products():
 
     PRODUCT_CACHE = mapping
     PRODUCT_CACHE_TS = time.time()
-    print(f"DEBUG products cached: {len(PRODUCT_CACHE)} items", file=sys.stderr, flush=True)
     return PRODUCT_CACHE
 
 
@@ -117,7 +116,7 @@ def fetch_category_sales(target_date):
     return {"hot": hot, "cold": cold, "bar": bar}
 
 
-# ===== Почасовые данные для графика =====
+# ===== Почасовые данные =====
 def fetch_transactions_hourly(day_offset=0):
     products = load_products()
     target_date = (date.today() - timedelta(days=day_offset)).strftime("%Y-%m-%d")
@@ -214,19 +213,13 @@ def api_sales():
         hourly = fetch_transactions_hourly(0)
         prev = fetch_transactions_hourly(7)
 
-        # Обрезаем данные прошлой недели по текущему часу (для таблиц)
-        cur_hour = datetime.now().hour
-        cut_idx = sum(1 for h in prev["labels"] if int(h[:2]) <= cur_hour)
-        hot_prev_cut = {k: v for k, v in sums_prev["hot"].items()}
-        cold_prev_cut = {k: v for k, v in sums_prev["cold"].items()}
-
         CACHE.update(
             {
                 "hot": sums_today["hot"],
                 "cold": sums_today["cold"],
                 "bar": sums_today["bar"],
-                "hot_prev": hot_prev_cut,
-                "cold_prev": cold_prev_cut,
+                "hot_prev": sums_prev["hot"],
+                "cold_prev": sums_prev["cold"],
                 "shares": shares,
                 "hourly": hourly,
                 "hourly_prev": prev,
@@ -285,6 +278,18 @@ def index():
         <script>
         let chart, pie;
 
+        function cutToNow(labels, hot, cold){
+            const now = new Date();
+            const curHour = now.getHours();
+            let cutIndex = labels.findIndex(l => parseInt(l) > curHour);
+            if(cutIndex === -1) cutIndex = labels.length;
+            return {
+                labels: labels.slice(0, cutIndex),
+                hot: hot.slice(0, cutIndex),
+                cold: cold.slice(0, cutIndex)
+            }
+        }
+
         async function refresh(){
             const r = await fetch('/api/sales');
             const data = await r.json();
@@ -302,7 +307,7 @@ def index():
             fill('hot_tbl', data.hot || {}, data.hot_prev || {});
             fill('cold_tbl', data.cold || {}, data.cold_prev || {});
 
-            // круговая диаграмма (pie, без дырки)
+            // круговая диаграмма
             const ctxPie = document.getElementById('pie').getContext('2d');
             if(pie) pie.destroy();
             pie = new Chart(ctxPie, {
@@ -331,6 +336,9 @@ def index():
             });
 
             // график по часам
+            const todayCut = cutToNow(data.hourly.labels, data.hourly.hot, data.hourly.cold);
+            const prev = data.hourly_prev;
+
             const ctx = document.getElementById('chart').getContext('2d');
             if(chart) chart.destroy();
             chart = new Chart(ctx,{
@@ -338,10 +346,10 @@ def index():
                 data:{
                     labels: data.hourly.labels,
                     datasets:[
-                        {label:'Гарячий', data:data.hourly.hot, borderColor:'#ff8800', tension:0.25, fill:false},
-                        {label:'Холодний', data:data.hourly.cold, borderColor:'#33b5ff', tension:0.25, fill:false},
-                        {label:'Гарячий (мин. тижд.)', data:data.hourly_prev.hot, borderColor:'#ff8800', borderDash:[6,4], tension:0.25, fill:false},
-                        {label:'Холодний (мин. тижд.)', data:data.hourly_prev.cold, borderColor:'#33b5ff', borderDash:[6,4], tension:0.25, fill:false}
+                        {label:'Гарячий', data:todayCut.hot, borderColor:'#ff8800', tension:0.25, fill:false},
+                        {label:'Холодний', data:todayCut.cold, borderColor:'#33b5ff', tension:0.25, fill:false},
+                        {label:'Гарячий (мин. тижд.)', data:prev.hot, borderColor:'#ff8800', borderDash:[6,4], tension:0.25, fill:false},
+                        {label:'Холодний (мин. тижд.)', data:prev.cold, borderColor:'#33b5ff', borderDash:[6,4], tension:0.25, fill:false}
                     ]
                 },
                 options:{
