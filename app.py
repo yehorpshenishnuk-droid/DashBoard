@@ -388,38 +388,45 @@ def index():
             }
             
             .clock {
-                font-size: 28px;
+                font-size: 36px;
                 font-weight: 700;
                 color: var(--accent);
-                margin: 8px 0;
+                margin: 12px 0;
                 font-variant-numeric: tabular-nums;
+                width: 80%;
+                text-align: center;
+                margin-left: auto;
+                margin-right: auto;
             }
             
             .weather {
                 display: flex;
                 flex-direction: column;
                 align-items: center;
-                gap: 4px;
+                gap: 8px;
                 flex: 1;
                 justify-content: center;
+                width: 80%;
+                margin: 0 auto;
             }
             
             .weather img {
-                width: 50px;
-                height: 50px;
+                width: 80px;
+                height: 80px;
                 filter: drop-shadow(0 2px 4px rgba(0,0,0,0.3));
             }
             
             .temp {
-                font-size: 18px;
+                font-size: 24px;
                 font-weight: 600;
                 color: var(--fg);
             }
             
             .desc {
-                font-size: 11px;
+                font-size: 14px;
                 color: var(--fg-secondary);
                 text-transform: capitalize;
+                text-align: center;
             }
             
             /* Лого */
@@ -524,6 +531,14 @@ def index():
                 </div>
             </div>
             
+            <!-- Круговая диаграмма -->
+            <div class="card pie-card">
+                <h2>📊 Розподіл замовлень</h2>
+                <div class="pie-container">
+                    <canvas id="pie" width="180" height="180"></canvas>
+                </div>
+            </div>
+            
             <!-- Время и погода -->
             <div class="card weather-card">
                 <h2>🕐 Час і погода</h2>
@@ -533,14 +548,6 @@ def index():
                         <div class="temp">—°C</div>
                         <div class="desc">Завантаження...</div>
                     </div>
-                </div>
-            </div>
-            
-            <!-- Круговая диаграмма -->
-            <div class="card pie-card">
-                <h2>📊 Розподіл замовлень</h2>
-                <div class="pie-container">
-                    <canvas id="pie" width="180" height="180"></canvas>
                 </div>
             </div>
             
@@ -614,15 +621,7 @@ def index():
                         maintainAspectRatio: false,
                         plugins: {
                             legend: {
-                                position: 'bottom',
-                                labels: {
-                                    color: '#cccccc',
-                                    font: {
-                                        size: 10
-                                    },
-                                    padding: 10,
-                                    usePointStyle: true
-                                }
+                                display: false
                             },
                             tooltip: {
                                 backgroundColor: 'rgba(26, 26, 26, 0.9)',
@@ -635,9 +634,52 @@ def index():
                                         return context.label + ': ' + context.parsed + '%';
                                     }
                                 }
+                            },
+                            datalabels: {
+                                display: true,
+                                color: '#ffffff',
+                                font: {
+                                    weight: 'bold',
+                                    size: 12
+                                },
+                                formatter: function(value, context) {
+                                    if (value > 5) { // Показывать только если процент больше 5%
+                                        const label = context.chart.data.labels[context.dataIndex];
+                                        return label + '\n' + value + '%';
+                                    }
+                                    return '';
+                                }
                             }
                         }
-                    }
+                    },
+                    plugins: [{
+                        id: 'centerLabels',
+                        afterDraw: function(chart) {
+                            const ctx = chart.ctx;
+                            const chartArea = chart.chartArea;
+                            
+                            chart.data.datasets.forEach((dataset, i) => {
+                                const meta = chart.getDatasetMeta(i);
+                                meta.data.forEach((element, index) => {
+                                    if (dataset.data[index] > 5) { // Показываем только если больше 5%
+                                        const position = element.tooltipPosition();
+                                        const label = chart.data.labels[index];
+                                        const value = dataset.data[index];
+                                        
+                                        ctx.fillStyle = '#ffffff';
+                                        ctx.font = 'bold 11px Arial';
+                                        ctx.textAlign = 'center';
+                                        ctx.textBaseline = 'middle';
+                                        
+                                        const lines = [label, value + '%'];
+                                        lines.forEach((line, lineIndex) => {
+                                            ctx.fillText(line, position.x, position.y + (lineIndex - 0.5) * 12);
+                                        });
+                                    }
+                                });
+                            });
+                        }
+                    }]
                 });
 
                 // Линейная диаграмма
