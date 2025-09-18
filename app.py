@@ -8,11 +8,11 @@ from flask import Flask, render_template_string, jsonify
 app = Flask(__name__)
 
 # ==== Конфиг ====
-ACCOUNT_NAME = os.getenv("POSTER_ACCOUNT", "poka-net3")     # для Poster
-POSTER_TOKEN = os.getenv("POSTER_TOKEN")                    # обязателен
-CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")                    # токен ChoiceQR
-CHOICE_DOMAIN = os.getenv("CHOICE_DOMAIN", "the-greco.choiceqr.com")
-CHOICE_MODE = os.getenv("CHOICE_MODE", "bearer").lower()    # bearer | api_key
+POSTER_ACCOUNT = "poka-net3"                       # для Poster API
+POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
+CHOICE_ACCOUNT = os.getenv("CHOICE_ACCOUNT", "the-greco")  # для Choice API (subdomain)
+CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # обязателен, токен
+CHOICE_MODE = os.getenv("CHOICE_MODE", "auto")     # "auto", "bearer" или "api_key"
 
 # Категории POS ID
 HOT_CATEGORIES  = {4, 13, 15, 46, 33}
@@ -24,15 +24,13 @@ PRODUCT_CACHE_TS = 0
 CACHE = {"hot": {}, "cold": {}, "hourly": {}, "hourly_prev": {}, "bookings": []}
 CACHE_TS = 0
 
-
 # ===== Helpers =====
 def _get(url, **kwargs):
     r = requests.get(url, timeout=kwargs.pop("timeout", 25))
-    log_snippet = r.text[:1200].replace("\n", " ")
+    log_snippet = r.text[:1500].replace("\n", " ")
     print(f"DEBUG GET {url.split('?')[0]} -> {r.status_code} : {log_snippet}", file=sys.stderr, flush=True)
     r.raise_for_status()
     return r
-
 
 # ===== Справочник товаров =====
 def load_products():
@@ -46,7 +44,7 @@ def load_products():
         page = 1
         while True:
             url = (
-                f"https://{ACCOUNT_NAME}.joinposter.com/api/menu.getProducts"
+                f"https://{POSTER_ACCOUNT}.joinposter.com/api/menu.getProducts"
                 f"?token={POSTER_TOKEN}&type={ptype}&per_page={per_page}&page={page}"
             )
             try:
@@ -77,12 +75,11 @@ def load_products():
     print(f"DEBUG products cached: {len(PRODUCT_CACHE)} items", file=sys.stderr, flush=True)
     return PRODUCT_CACHE
 
-
 # ===== Сводные продажи =====
 def fetch_category_sales():
     today = date.today().strftime("%Y-%m-%d")
     url = (
-        f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getCategoriesSales"
+        f"https://{POSTER_ACCOUNT}.joinposter.com/api/dash.getCategoriesSales"
         f"?token={POSTER_TOKEN}&dateFrom={today}&dateTo={today}"
     )
     try:
@@ -110,7 +107,6 @@ def fetch_category_sales():
     cold = dict(sorted(cold.items(), key=lambda x: x[1], reverse=True))
     return {"hot": hot, "cold": cold}
 
-
 # ===== Почасовая диаграмма =====
 def fetch_transactions_hourly(day_offset=0):
     products = load_products()
@@ -118,13 +114,13 @@ def fetch_transactions_hourly(day_offset=0):
 
     per_page = 500
     page = 1
-    hours = list(range(10, 23))
+    hours = list(range(10, 23))   # фиксированный диапазон 10:00–22:00
     hot_by_hour = [0] * len(hours)
     cold_by_hour = [0] * len(hours)
 
     while True:
         url = (
-            f"https://{ACCOUNT_NAME}.joinposter.com/api/transactions.getTransactions"
+            f"https://{POSTER_ACCOUNT}.joinposter.com/api/transactions.getTransactions"
             f"?token={POSTER_TOKEN}&date_from={target_date}&date_to={target_date}"
             f"&per_page={per_page}&page={page}"
         )
@@ -179,61 +175,68 @@ def fetch_transactions_hourly(day_offset=0):
     labels = [f"{h:02d}:00" for h in hours]
     return {"labels": labels, "hot": hot_cum, "cold": cold_cum}
 
-
 # ===== Бронирования =====
 def fetch_bookings():
     if not CHOICE_TOKEN:
         return []
 
+    base_url = f"https://{CHOICE_ACCOUNT}.choiceqr.com/api/bookings/list"
     today = date.today()
     params = {
-        "from": f"{today.isoformat()}T00:00:00Z",
-        "till": f"{today.isoformat()}T23:59:59.999999Z",
+        "from": f"{today}T00:00:00Z",
+        "till": f"{today}T23:59:59.999999Z",
         "periodField": "dateTime",
         "page": 1,
         "perPage": 20,
     }
 
-    url = f"https://{CHOICE_DOMAIN}/api/bookings/list"
     headers = {}
-    if CHOICE_MODE == "api_key":
-        headers["X-API-KEY"] = CHOICE_TOKEN
-    else:
-        headers["Authorization"] = f"Bearer {CHOICE_TOKEN}"
+    tried = []
 
-    print(f"DEBUG Choice URL: {url} params={params} headers={list(headers.keys())}", file=sys.stderr, flush=True)
+    # авто-режим
+    modes = ["bearer", "api_key"] if CHOICE_MODE == "auto" else [CHOICE_MODE]
 
-    try:
-        resp = requests.get(url, headers=headers, params=params, timeout=20)
-        resp.raise_for_status()
-        data = resp.json()
-    except Exception as e:
-        print("ERROR Choice fetch:", e, file=sys.stderr, flush=True)
-        return []
+    for mode in modes:
+        try:
+            if mode == "bearer":
+                headers = {"Authorization": f"Bearer {CHOICE_TOKEN}"}
+            elif mode == "api_key":
+                headers = {"X-API-KEY": CHOICE_TOKEN}
+            print(f"DEBUG Choice URL: {base_url} params={params} headers={list(headers.keys())}", file=sys.stderr, flush=True)
+            r = requests.get(base_url, headers=headers, params=params, timeout=20)
+            if r.status_code == 401:
+                tried.append(mode)
+                continue
+            r.raise_for_status()
+            data = r.json()
+            items = None
+            for key in ("items", "data", "list", "bookings", "response"):
+                v = data.get(key)
+                if isinstance(v, list):
+                    items = v; break
+            if not items:
+                return []
+            out = []
+            for b in items[:12]:
+                name = (b.get("customer") or {}).get("name") or b.get("name") or "—"
+                guests = b.get("personCount") or b.get("persons") or b.get("guests") or "—"
+                time_str = b.get("dateTime") or b.get("bookingDt") or b.get("startDateTime") or ""
+                if isinstance(time_str, str) and len(time_str) >= 16:
+                    try:
+                        time_str = datetime.fromisoformat(time_str.replace("Z","+00:00")).strftime("%H:%M")
+                    except Exception:
+                        try:
+                            time_str = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
+                        except Exception:
+                            pass
+                out.append({"name": name, "time": time_str or "—", "guests": guests})
+            return out
+        except Exception as e:
+            print("ERROR Choice fetch:", e, file=sys.stderr, flush=True)
+            continue
 
-    items = None
-    for key in ("items", "data", "list", "bookings", "response"):
-        v = data.get(key)
-        if isinstance(v, list):
-            items = v
-            break
-    if not items:
-        return []
-
-    out = []
-    for b in items[:12]:
-        cust = b.get("customer", {}) or {}
-        name = cust.get("name") or b.get("name") or "—"
-        guests = b.get("personCount") or b.get("persons") or "—"
-        time_str = b.get("dateTime") or ""
-        if isinstance(time_str, str) and len(time_str) >= 16:
-            try:
-                time_str = datetime.fromisoformat(time_str.replace("Z","+00:00")).strftime("%H:%M")
-            except Exception:
-                pass
-        out.append({"name": name, "time": time_str or "—", "guests": guests})
-    return out
-
+    print(f"ERROR: All Choice auth modes failed ({tried})", file=sys.stderr, flush=True)
+    return []
 
 # ===== API =====
 @app.route("/api/sales")
@@ -252,20 +255,16 @@ def api_sales():
         CACHE_TS = time.time()
     return jsonify(CACHE)
 
-
 # ===== UI =====
 @app.route("/")
 def index():
-    template = """
-    <html>
-    <head>
+    template = """<!DOCTYPE html>
+    <html><head>
         <meta charset="utf-8" />
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <style>
-            :root {
-                --bg:#0f0f0f; --panel:#151515; --fg:#eee;
-                --hot:#ff8800; --cold:#33b5ff;
-            }
+            :root { --bg:#0f0f0f; --panel:#151515; --fg:#eee;
+                    --hot:#ff8800; --cold:#33b5ff; }
             body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif}
             .wrap{padding:18px;max-width:1600px;margin:0 auto}
             .row{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
@@ -275,8 +274,7 @@ def index():
             td{padding:4px 2px} td:last-child{text-align:right}
             .logo{position:fixed;right:18px;bottom:12px;font-weight:800}
         </style>
-    </head>
-    <body>
+    </head><body>
         <div class="wrap">
             <div class="row">
                 <div class="card hot"><h2>🔥 Гарячий цех</h2><table id="hot_tbl"></table></div>
@@ -285,7 +283,7 @@ def index():
                 <div class="card chart"><h2>📊 Замовлення по годинах (накопич.)</h2><canvas id="chart" height="160"></canvas></div>
             </div>
         </div>
-        <div class="logo">GRECO Dashboard</div>
+        <div class="logo">GRECO</div>
 
         <script>
         let chart;
@@ -318,7 +316,7 @@ def index():
             b.innerHTML = (data.bookings||[]).map(x => `<tr><td>${x.name}</td><td>${x.time}</td><td>${x.guests}</td></tr>`).join('') || "<tr><td>—</td><td></td><td></td></tr>";
 
             let today = cutToNow(data.hourly.labels, data.hourly.hot, data.hourly.cold);
-            let prev = {labels: data.hourly_prev.labels, hot: data.hourly_prev.hot, cold: data.hourly_prev.cold};
+            let prev = {labels:data.hourly_prev.labels, hot:data.hourly_prev.hot, cold:data.hourly_prev.cold};
 
             const ctx = document.getElementById('chart').getContext('2d');
             if(chart) chart.destroy();
@@ -345,11 +343,8 @@ def index():
         }
         refresh(); setInterval(refresh, 60000);
         </script>
-    </body>
-    </html>
-    """
+    </body></html>"""
     return render_template_string(template)
-
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
