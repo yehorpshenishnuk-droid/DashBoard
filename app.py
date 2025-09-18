@@ -8,14 +8,13 @@ from flask import Flask, render_template_string, jsonify
 app = Flask(__name__)
 
 # ==== Конфиг ====
-POSTER_ACCOUNT = "poka-net3"                       # для Poster API
-POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
-CHOICE_ACCOUNT = os.getenv("CHOICE_ACCOUNT", "the-greco")  # для Choice API (subdomain)
-CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # обязателен, токен
-CHOICE_MODE = os.getenv("CHOICE_MODE", "auto")     # "auto", "bearer" или "api_key"
+POSTER_ACCOUNT = os.getenv("POSTER_ACCOUNT", "poka-net3")
+CHOICE_ACCOUNT = os.getenv("CHOICE_ACCOUNT", "the-greco")
+POSTER_TOKEN = os.getenv("POSTER_TOKEN")
+CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")
 
 # Категории POS ID
-HOT_CATEGORIES  = {4, 13, 15, 46, 33}
+HOT_CATEGORIES = {4, 13, 15, 46, 33}
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 
 # Кэш
@@ -24,15 +23,17 @@ PRODUCT_CACHE_TS = 0
 CACHE = {"hot": {}, "cold": {}, "hourly": {}, "hourly_prev": {}, "bookings": []}
 CACHE_TS = 0
 
+
 # ===== Helpers =====
 def _get(url, **kwargs):
     r = requests.get(url, timeout=kwargs.pop("timeout", 25))
-    log_snippet = r.text[:1500].replace("\n", " ")
+    log_snippet = r.text[:1000].replace("\n", " ")
     print(f"DEBUG GET {url.split('?')[0]} -> {r.status_code} : {log_snippet}", file=sys.stderr, flush=True)
     r.raise_for_status()
     return r
 
-# ===== Справочник товаров =====
+
+# ===== Products =====
 def load_products():
     global PRODUCT_CACHE, PRODUCT_CACHE_TS
     if PRODUCT_CACHE and time.time() - PRODUCT_CACHE_TS < 3600:
@@ -75,7 +76,8 @@ def load_products():
     print(f"DEBUG products cached: {len(PRODUCT_CACHE)} items", file=sys.stderr, flush=True)
     return PRODUCT_CACHE
 
-# ===== Сводные продажи =====
+
+# ===== Sales by category =====
 def fetch_category_sales():
     today = date.today().strftime("%Y-%m-%d")
     url = (
@@ -107,14 +109,15 @@ def fetch_category_sales():
     cold = dict(sorted(cold.items(), key=lambda x: x[1], reverse=True))
     return {"hot": hot, "cold": cold}
 
-# ===== Почасовая диаграмма =====
+
+# ===== Hourly chart =====
 def fetch_transactions_hourly(day_offset=0):
     products = load_products()
     target_date = (date.today() - timedelta(days=day_offset)).strftime("%Y-%m-%d")
 
     per_page = 500
     page = 1
-    hours = list(range(10, 23))   # фиксированный диапазон 10:00–22:00
+    hours = list(range(10, 23))
     hot_by_hour = [0] * len(hours)
     cold_by_hour = [0] * len(hours)
 
@@ -168,75 +171,76 @@ def fetch_transactions_hourly(day_offset=0):
     hot_cum, cold_cum = [], []
     th, tc = 0, 0
     for h, c in zip(hot_by_hour, cold_by_hour):
-        th += h; tc += c
+        th += h
+        tc += c
         hot_cum.append(th)
         cold_cum.append(tc)
 
     labels = [f"{h:02d}:00" for h in hours]
     return {"labels": labels, "hot": hot_cum, "cold": cold_cum}
 
-# ===== Бронирования =====
+
+# ===== Bookings =====
 def fetch_bookings():
     if not CHOICE_TOKEN:
         return []
 
-    base_url = f"https://{CHOICE_ACCOUNT}.choiceqr.com/api/bookings/list"
+    url = f"https://{CHOICE_ACCOUNT}.choiceqr.com/api/bookings/list"
     today = date.today()
     params = {
-        "from": f"{today}T00:00:00Z",
-        "till": f"{today}T23:59:59.999999Z",
+        "from": f"{today.isoformat()}T00:00:00Z",
+        "till": f"{today.isoformat()}T23:59:59.999999Z",
         "periodField": "dateTime",
         "page": 1,
         "perPage": 20,
     }
 
-    headers = {}
-    tried = []
+    modes = [
+        ("bearer", {"Authorization": f"Bearer {CHOICE_TOKEN}"}),
+        ("api_key", {"X-API-KEY": CHOICE_TOKEN}),
+        ("apikey_header", {"Authorization": f"ApiKey {CHOICE_TOKEN}"}),
+    ]
 
-    # авто-режим
-    modes = ["bearer", "api_key"] if CHOICE_MODE == "auto" else [CHOICE_MODE]
-
-    for mode in modes:
+    last_error = None
+    for mode, headers in modes:
         try:
-            if mode == "bearer":
-                headers = {"Authorization": f"Bearer {CHOICE_TOKEN}"}
-            elif mode == "api_key":
-                headers = {"X-API-KEY": CHOICE_TOKEN}
-            print(f"DEBUG Choice URL: {base_url} params={params} headers={list(headers.keys())}", file=sys.stderr, flush=True)
-            r = requests.get(base_url, headers=headers, params=params, timeout=20)
-            if r.status_code == 401:
-                tried.append(mode)
-                continue
-            r.raise_for_status()
-            data = r.json()
-            items = None
-            for key in ("items", "data", "list", "bookings", "response"):
-                v = data.get(key)
-                if isinstance(v, list):
-                    items = v; break
-            if not items:
-                return []
-            out = []
-            for b in items[:12]:
-                name = (b.get("customer") or {}).get("name") or b.get("name") or "—"
-                guests = b.get("personCount") or b.get("persons") or b.get("guests") or "—"
-                time_str = b.get("dateTime") or b.get("bookingDt") or b.get("startDateTime") or ""
-                if isinstance(time_str, str) and len(time_str) >= 16:
-                    try:
-                        time_str = datetime.fromisoformat(time_str.replace("Z","+00:00")).strftime("%H:%M")
-                    except Exception:
+            print(f"DEBUG Choice URL: {url} params={params} headers={list(headers.keys())}", file=sys.stderr, flush=True)
+            r = requests.get(url, params=params, headers=headers, timeout=20)
+            if r.status_code == 200:
+                data = r.json()
+                items = None
+                for key in ("items", "data", "list", "bookings", "response"):
+                    v = data.get(key)
+                    if isinstance(v, list):
+                        items = v
+                        break
+                if not items:
+                    return []
+                out = []
+                for b in items[:12]:
+                    name = (b.get("customer") or {}).get("name") or b.get("name") or "—"
+                    guests = b.get("personCount") or b.get("persons") or b.get("guests") or "—"
+                    time_str = b.get("dateTime") or b.get("bookingDt") or b.get("startDateTime") or ""
+                    if isinstance(time_str, str) and len(time_str) >= 16:
                         try:
-                            time_str = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
+                            time_str = datetime.fromisoformat(time_str.replace("Z", "+00:00")).strftime("%H:%M")
                         except Exception:
-                            pass
-                out.append({"name": name, "time": time_str or "—", "guests": guests})
-            return out
+                            try:
+                                time_str = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
+                            except Exception:
+                                pass
+                    out.append({"name": name, "time": time_str or "—", "guests": guests})
+                print(f"DEBUG Choice bookings fetched mode={mode} count={len(out)}", file=sys.stderr, flush=True)
+                return out
+            else:
+                last_error = f"{mode} -> {r.status_code} {r.text[:200]}"
         except Exception as e:
-            print("ERROR Choice fetch:", e, file=sys.stderr, flush=True)
+            last_error = f"{mode} -> {e}"
             continue
 
-    print(f"ERROR: All Choice auth modes failed ({tried})", file=sys.stderr, flush=True)
+    print(f"ERROR: All Choice auth modes failed ({[m[0] for m in modes]}) last={last_error}", file=sys.stderr, flush=True)
     return []
+
 
 # ===== API =====
 @app.route("/api/sales")
@@ -247,24 +251,26 @@ def api_sales():
         hourly = fetch_transactions_hourly(0)
         prev = fetch_transactions_hourly(7)
         bookings = fetch_bookings()
-        CACHE.update({
-            "hot": sums["hot"], "cold": sums["cold"],
-            "hourly": hourly, "hourly_prev": prev,
-            "bookings": bookings
-        })
+        CACHE.update(
+            {"hot": sums["hot"], "cold": sums["cold"], "hourly": hourly, "hourly_prev": prev, "bookings": bookings}
+        )
         CACHE_TS = time.time()
     return jsonify(CACHE)
+
 
 # ===== UI =====
 @app.route("/")
 def index():
-    template = """<!DOCTYPE html>
-    <html><head>
+    template = """
+    <html>
+    <head>
         <meta charset="utf-8" />
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <style>
-            :root { --bg:#0f0f0f; --panel:#151515; --fg:#eee;
-                    --hot:#ff8800; --cold:#33b5ff; }
+            :root {
+                --bg:#0f0f0f; --panel:#151515; --fg:#eee;
+                --hot:#ff8800; --cold:#33b5ff;
+            }
             body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif}
             .wrap{padding:18px;max-width:1600px;margin:0 auto}
             .row{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
@@ -274,7 +280,8 @@ def index():
             td{padding:4px 2px} td:last-child{text-align:right}
             .logo{position:fixed;right:18px;bottom:12px;font-weight:800}
         </style>
-    </head><body>
+    </head>
+    <body>
         <div class="wrap">
             <div class="row">
                 <div class="card hot"><h2>🔥 Гарячий цех</h2><table id="hot_tbl"></table></div>
@@ -343,8 +350,11 @@ def index():
         }
         refresh(); setInterval(refresh, 60000);
         </script>
-    </body></html>"""
+    </body>
+    </html>
+    """
     return render_template_string(template)
+
 
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
