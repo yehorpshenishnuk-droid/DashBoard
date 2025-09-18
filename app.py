@@ -10,7 +10,6 @@ app = Flask(__name__)
 # ==== Конфиг ====
 ACCOUNT_NAME = "poka-net3"
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
-CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # опционален (бронирования)
 
 # Категории POS ID
 HOT_CATEGORIES  = {4, 13, 15, 46, 33}                 # ЧЕБУРЕКИ, М'ЯСНІ, ЯНТИКИ, ГАРЯЧІ, ПІДЕ
@@ -19,7 +18,7 @@ COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 # Кэш
 PRODUCT_CACHE = {}           # product_id -> menu_category_id
 PRODUCT_CACHE_TS = 0
-CACHE = {"hot": {}, "cold": {}, "hourly": {}, "hourly_prev": {}, "bookings": []}
+CACHE = {"hot": {}, "cold": {}, "hourly": {}, "hourly_prev": {}}
 CACHE_TS = 0
 
 # ===== Helpers =====
@@ -173,43 +172,6 @@ def fetch_transactions_hourly(day_offset=0):
     labels = [f"{h:02d}:00" for h in hours]
     return {"labels": labels, "hot": hot_cum, "cold": cold_cum}
 
-# ===== Бронирования =====
-def fetch_bookings():
-    if not CHOICE_TOKEN:
-        return []
-    url = f"https://{ACCOUNT_NAME}.choiceqr.com/api/bookings/list"
-    headers = {"Authorization": f"Bearer {CHOICE_TOKEN}"}
-    try:
-        resp = requests.get(url, headers=headers, timeout=20)
-        data = resp.json()
-    except Exception as e:
-        print("ERROR Choice:", e, file=sys.stderr, flush=True)
-        return []
-
-    items = None
-    for key in ("items", "data", "list", "bookings", "response"):
-        v = data.get(key)
-        if isinstance(v, list):
-            items = v; break
-    if not items:
-        return []
-
-    out = []
-    for b in items[:12]:
-        name = (b.get("customer") or {}).get("name") or b.get("name") or "—"
-        guests = b.get("personCount") or b.get("persons") or b.get("guests") or "—"
-        time_str = b.get("dateTime") or b.get("bookingDt") or b.get("startDateTime") or ""
-        if isinstance(time_str, str) and len(time_str) >= 16:
-            try:
-                time_str = datetime.fromisoformat(time_str.replace("Z","+00:00")).strftime("%H:%M")
-            except Exception:
-                try:
-                    time_str = datetime.strptime(time_str, "%Y-%m-%d %H:%M:%S").strftime("%H:%M")
-                except Exception:
-                    pass
-        out.append({"name": name, "time": time_str or "—", "guests": guests})
-    return out
-
 # ===== API =====
 @app.route("/api/sales")
 def api_sales():
@@ -218,11 +180,9 @@ def api_sales():
         sums = fetch_category_sales()
         hourly = fetch_transactions_hourly(0)
         prev = fetch_transactions_hourly(7)
-        bookings = fetch_bookings()
         CACHE.update({
             "hot": sums["hot"], "cold": sums["cold"],
-            "hourly": hourly, "hourly_prev": prev,
-            "bookings": bookings
+            "hourly": hourly, "hourly_prev": prev
         })
         CACHE_TS = time.time()
     return jsonify(CACHE)
@@ -242,7 +202,7 @@ def index():
             }
             body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif}
             .wrap{padding:18px;max-width:1600px;margin:0 auto}
-            .row{display:grid;grid-template-columns:repeat(3,1fr);gap:18px}
+            .row{display:grid;grid-template-columns:repeat(2,1fr);gap:18px}
             .card{background:var(--panel);border-radius:14px;padding:14px 16px;}
             .card.chart{grid-column:1/-1;}
             table{width:100%;border-collapse:collapse;font-size:18px}
@@ -255,7 +215,6 @@ def index():
             <div class="row">
                 <div class="card hot"><h2>🔥 Гарячий цех</h2><table id="hot_tbl"></table></div>
                 <div class="card cold"><h2>❄️ Холодний цех</h2><table id="cold_tbl"></table></div>
-                <div class="card book"><h2>📅 Бронювання</h2><table id="book_tbl"></table></div>
                 <div class="card chart"><h2>📊 Замовлення по годинах (накопич.)</h2><canvas id="chart" height="160"></canvas></div>
             </div>
         </div>
@@ -288,8 +247,6 @@ def index():
             }
             fill('hot_tbl', data.hot || {});
             fill('cold_tbl', data.cold || {});
-            const b = document.getElementById('book_tbl');
-            b.innerHTML = (data.bookings||[]).map(x => `<tr><td>${x.name}</td><td>${x.time}</td><td>${x.guests}</td></tr>`).join('') || "<tr><td>—</td><td></td><td></td></tr>";
 
             // сегодняшние данные обрезаем по текущему часу
             let today = cutToNow(data.hourly.labels, data.hourly.hot, data.hourly.cold);
