@@ -168,28 +168,27 @@ def fetch_transactions_hourly(day_offset=0):
             break
         page += 1
 
+    # Накопительные суммы
     hot_cum, cold_cum = [], []
     th, tc = 0, 0
     for h, c in zip(hot_by_hour, cold_by_hour):
-        th += h; tc += c
+        th += h
+        tc += c
         hot_cum.append(th)
-        cold_cum.append(c)
+        cold_cum.append(tc)
 
     labels = [f"{h:02d}:00" for h in hours]
 
-    # === Новая логика: сегодняшние линии только до текущего часа ===
+    # Сегодня → обрезаем по текущему часу
     if day_offset == 0:
         current_hour = datetime.now().hour
-        masked_hot, masked_cold = [], []
-        for hour, hval, cval in zip(hours, hot_cum, cold_cum):
-            if hour <= current_hour:   # показываем только до текущего часа
-                masked_hot.append(hval)
-                masked_cold.append(cval)
-            else:
-                masked_hot.append(None)  # после текущего часа оставляем пусто
-                masked_cold.append(None)
-        hot_cum = masked_hot
-        cold_cum = masked_cold
+        if current_hour >= hours[0]:
+            cut_idx = hours.index(current_hour) + 1 if current_hour in hours else len(hours)
+            hot_cum = hot_cum[:cut_idx]
+            cold_cum = cold_cum[:cut_idx]
+            labels = labels[:cut_idx]
+        else:
+            hot_cum, cold_cum, labels = [], [], []
 
     return {"labels": labels, "hot": hot_cum, "cold": cold_cum}
 
