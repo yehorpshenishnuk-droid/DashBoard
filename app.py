@@ -23,7 +23,7 @@ PRODUCT_CACHE = {}
 PRODUCT_CACHE_TS = 0
 CACHE = {
     "hot": {}, "cold": {}, "hot_prev": {}, "cold_prev": {},
-    "hourly": {}, "hourly_prev": {}, "share": {}, "tables": {}
+    "hourly": {}, "hourly_prev": {}, "share": {}
 }
 CACHE_TS = 0
 
@@ -269,7 +269,6 @@ def api_sales():
         })
         CACHE_TS = time.time()
 
-    # столы сюда не кешируем
     return jsonify(CACHE)
 
 @app.route("/api/tables")
@@ -434,8 +433,13 @@ def index():
             renderTables('terrace', data.terrace||[]);
         }
 
-        refresh(); setInterval(refresh, 60000);
-        refreshTables(); setInterval(refreshTables, 30000);
+        // запуск сразу
+        refresh(); 
+        refreshTables();
+
+        // автообновление
+        setInterval(refresh, 60000);
+        setInterval(refreshTables, 30000);
         </script>
     </body>
     </html>
