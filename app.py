@@ -19,7 +19,7 @@ BAR_CATEGORIES  = {9,14,27,28,34,41,42,47,22,24,25,26,39,30}
 
 # ====== Столы ======
 ALL_TABLES = {
-    1:"Стол 1", 2:"Стол 2", 3:"Стол 3", 4:"Стол 4", 5:"Стол 5", 6:"Стол 6",
+    1:"Стол 1", 2:"Стол 2", 3:"Стол 3", 4:"Стол 4", 5:"Стол 5", 6:"Стол 6", 8:"Стол 8",
     7:"Стол 7", 10:"Стол 10", 11:"Стол 11", 12:"Стол 12", 13:"Стол 13"
 }
 TERRACE_IDS = {7, 10, 11, 12, 13}
@@ -200,11 +200,16 @@ def fetch_weather():
         print("ERROR weather:", e, file=sys.stderr, flush=True)
         return {"temp": "Н/Д", "desc": "Н/Д", "icon": ""}
 
-# ===== API Poster: открытые заказы =====
+# ===== API Poster: открытые чеки =====
 def fetch_open_orders():
-    url = f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getOpenOrders?token={POSTER_TOKEN}"
+    url = f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getTransactions"
+    params = {
+        "token": POSTER_TOKEN,
+        "dateFrom": date.today().strftime("%Y%m%d"),
+        "dateTo": date.today().strftime("%Y%m%d")
+    }
     try:
-        resp = _get(url)
+        resp = requests.get(url, params=params, timeout=20)
         rows = resp.json().get("response", [])
     except Exception as e:
         print("ERROR open_orders:", e, file=sys.stderr, flush=True)
@@ -213,10 +218,11 @@ def fetch_open_orders():
     busy = {}
     for row in rows:
         try:
-            tid = int(row.get("table_id", 0))
-            waiter = row.get("user_name", "").strip()
-            if tid:
-                busy[tid] = waiter
+            if row.get("status") == "1":  # открытый чек
+                tid = int(row.get("table_id", 0))
+                waiter = row.get("name", "").strip()
+                if tid:
+                    busy[tid] = waiter
         except Exception:
             continue
     return busy
@@ -287,8 +293,9 @@ def index():
             body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif}
             .wrap{padding:10px;max-width:1800px;margin:0 auto}
             .row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:10px}
+            .row.bottom{grid-template-columns:2fr 1fr;}
             .card{background:var(--panel);border-radius:12px;padding:10px 14px;}
-            .card.chart{grid-column:1/-1;height:420px}
+            .card.chart{height:420px}
             table{width:100%;border-collapse:collapse;font-size:16px}
             th,td{padding:3px 6px;text-align:right}
             th:first-child,td:first-child{text-align:left}
@@ -303,6 +310,7 @@ def index():
     </head>
     <body>
         <div class="wrap">
+            <!-- Верхний ряд -->
             <div class="row">
                 <div class="card hot"><h2>🔥 Гарячий цех</h2><table id="hot_tbl"></table></div>
                 <div class="card cold"><h2>❄️ Холодний цех</h2><table id="cold_tbl"></table></div>
@@ -311,6 +319,10 @@ def index():
                     <div id="clock" style="font-size:32px;margin-top:10px"></div>
                     <div id="weather" style="margin-top:10px;font-size:18px"></div>
                 </div>
+            </div>
+
+            <!-- Нижний ряд -->
+            <div class="row bottom">
                 <div class="card chart"><h2>📈 Замовлення по годинах (накопич.)</h2><canvas id="chart"></canvas></div>
                 <div class="card hall">
                     <h2>🪑 Зал</h2>
@@ -338,7 +350,7 @@ def index():
             const r = await fetch('/api/sales');
             const data = await r.json();
 
-            // Таблицы
+            // Таблицы цехов
             function fill(id, today, prev){
                 const el = document.getElementById(id);
                 let html = "<tr><th>Категорія</th><th>Сьогодні</th><th>Мин. тиждень</th></tr>";
@@ -399,10 +411,7 @@ def index():
                 },
                 options:{
                     responsive:true,
-                    plugins:{
-                        legend:{labels:{color:'#ddd'}},
-                        datalabels:{display:false}
-                    },
+                    plugins:{legend:{labels:{color:'#ddd'}},tooltip:{enabled:true}},
                     scales:{
                         x:{ticks:{color:'#bbb'},title:{display:true,text:'Час'}},
                         y:{ticks:{color:'#bbb'},beginAtZero:true}
@@ -412,45 +421,4 @@ def index():
 
             // Часы и погода
             const now = new Date();
-            document.getElementById('clock').innerText = now.toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'});
-            const w = data.weather||{};
-            let whtml = "";
-            if(w.icon){ whtml += `<img src="https://openweathermap.org/img/wn/${w.icon}@2x.png" style="vertical-align:middle">`; }
-            whtml += ` ${w.temp||'—'}<br>${w.desc||'—'}`;
-            document.getElementById('weather').innerHTML = whtml;
-
-            // Зал и тераса
-            loadTables();
-        }
-
-        async function loadTables(){
-            const r = await fetch('/api/tables');
-            const data = await r.json();
-
-            function renderTables(list, target){
-                let html = '<div class="tables">';
-                list.forEach(t=>{
-                    const cls = t.status === 'busy' ? 'busy' : 'free';
-                    html += `<div class="table ${cls}">
-                               <div>${t.name}</div>
-                               <small>${t.waiter||''}</small>
-                             </div>`;
-                });
-                html += '</div>';
-                document.getElementById(target).innerHTML = html;
-            }
-
-            renderTables(data.hall, 'hall_grid');
-            renderTables(data.terrace, 'terrace_grid');
-        }
-
-        refresh(); setInterval(refresh, 60000);
-        </script>
-    </body>
-    </html>
-    """
-    return render_template_string(template)
-
-if __name__ == "__main__":
-    port = int(os.getenv("PORT", 5000))
-    app.run(host="0.0.0.0", port=port)
+            document.getElement
