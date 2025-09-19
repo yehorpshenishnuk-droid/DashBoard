@@ -18,21 +18,11 @@ HOT_CATEGORIES  = {4, 13, 15, 46, 33}
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 BAR_CATEGORIES  = {9,14,27,28,34,41,42,47,22,24,25,26,39,30}
 
-# Столы
-TABLES = {
-    "Зал": [1, 2, 3, 4, 5, 6, 8],
-    "Тераса": [7, 10, 11, 12, 13]
-}
-
 # Кэш
 PRODUCT_CACHE = {}
 PRODUCT_CACHE_TS = 0
 CACHE = {"hot": {}, "cold": {}, "hot_prev": {}, "cold_prev": {}, "hourly": {}, "hourly_prev": {}, "share": {}}
 CACHE_TS = 0
-EMPLOYEES = {}
-EMPLOYEES_TS = 0
-TABLES_CACHE = []
-TABLES_TS = 0
 
 # ===== Helpers =====
 def _get(url, **kwargs):
@@ -84,22 +74,6 @@ def load_products():
     PRODUCT_CACHE_TS = time.time()
     print(f"DEBUG products cached: {len(PRODUCT_CACHE)} items", file=sys.stderr, flush=True)
     return PRODUCT_CACHE
-
-# ===== Сотрудники =====
-def load_employees():
-    global EMPLOYEES, EMPLOYEES_TS
-    if EMPLOYEES and time.time() - EMPLOYEES_TS < 3600:
-        return EMPLOYEES
-    try:
-        url = f"https://{ACCOUNT_NAME}.joinposter.com/api/access.getEmployees?token={POSTER_TOKEN}"
-        resp = _get(url)
-        data = resp.json().get("response", [])
-        EMPLOYEES = {int(u["user_id"]): u["name"] for u in data}
-        EMPLOYEES_TS = time.time()
-    except Exception as e:
-        print("ERROR employees:", e, file=sys.stderr, flush=True)
-        EMPLOYEES = {}
-    return EMPLOYEES
 
 # ===== Сводные продажи =====
 def fetch_category_sales(day_offset=0):
@@ -249,44 +223,6 @@ def api_sales():
         CACHE_TS = time.time()
     return jsonify(CACHE)
 
-@app.route("/api/tables")
-def api_tables():
-    global TABLES_CACHE, TABLES_TS
-    if time.time() - TABLES_TS < 60 and TABLES_CACHE:
-        return jsonify(TABLES_CACHE)
-
-    employees = load_employees()
-    result = []
-
-    try:
-        url = f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getTransactions?token={POSTER_TOKEN}&status=open"
-        resp = _get(url)
-        trxs = resp.json().get("response", [])
-    except Exception as e:
-        print("ERROR tables:", e, file=sys.stderr, flush=True)
-        trxs = []
-
-    busy = {}
-    for trx in trxs:
-        try:
-            tid = int(trx.get("spot_id", 0))
-            uid = int(trx.get("user_id", 0))
-            waiter = employees.get(uid, "—")
-            busy[tid] = waiter
-        except Exception:
-            continue
-
-    for zone, tables in TABLES.items():
-        for t in tables:
-            if t in busy:
-                result.append({"id": t, "zone": zone, "status": "busy", "waiter": busy[t]})
-            else:
-                result.append({"id": t, "zone": zone, "status": "free", "waiter": ""})
-
-    TABLES_CACHE = result
-    TABLES_TS = time.time()
-    return jsonify(result)
-
 # ===== UI =====
 @app.route("/")
 def index():
@@ -305,18 +241,12 @@ def index():
             .wrap{padding:10px;max-width:1800px;margin:0 auto}
             .row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:10px}
             .card{background:var(--panel);border-radius:12px;padding:10px 14px;}
-            .card.chart{grid-column:1/3;height:420px}
-            .card.tables{grid-column:3/5;height:420px}
+            .card.chart{grid-column:1/-1;height:420px}
             table{width:100%;border-collapse:collapse;font-size:16px}
             th,td{padding:3px 6px;text-align:right}
             th:first-child,td:first-child{text-align:left}
             .logo{position:fixed;right:18px;bottom:12px;font-weight:800}
             canvas{max-width:100%}
-            #tables_grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-top:10px}
-            .table{border-radius:8px;padding:10px;text-align:center;font-size:14px;font-weight:600}
-            .table.free{background:#555;color:#eee}
-            .table.busy{background:#4da6ff;color:#fff}
-            .zone-title{font-weight:bold;margin-top:8px;margin-bottom:4px}
         </style>
     </head>
     <body>
@@ -330,12 +260,6 @@ def index():
                     <div id="weather" style="margin-top:10px;font-size:18px"></div>
                 </div>
                 <div class="card chart"><h2>📈 Замовлення по годинах (накопич.)</h2><canvas id="chart"></canvas></div>
-                <div class="card tables"><h2>🍽️ Столи</h2>
-                    <div class="zone-title">Зал</div>
-                    <div id="tables_hall" class="tables_grid"></div>
-                    <div class="zone-title">Тераса</div>
-                    <div id="tables_terrace" class="tables_grid"></div>
-                </div>
             </div>
         </div>
         <div class="logo">GRECO</div>
@@ -368,7 +292,7 @@ def index():
             fill('hot_tbl', data.hot||{}, data.hot_prev||{});
             fill('cold_tbl', data.cold||{}, data.cold_prev||{});
 
-            // Круговая диаграмма
+            // Круговая диаграмма с подписями внутри
             Chart.register(ChartDataLabels);
             const ctx2 = document.getElementById('pie').getContext('2d');
             if(pie) pie.destroy();
@@ -397,7 +321,7 @@ def index():
                 }
             });
 
-            // Линейная диаграмма
+            // Линейная диаграмма (без цифр на линиях)
             let today_hot = cutToNow(data.hourly.labels, data.hourly.hot);
             let today_cold = cutToNow(data.hourly.labels, data.hourly.cold);
 
@@ -409,4 +333,40 @@ def index():
                     labels:data.hourly.labels,
                     datasets:[
                         {label:'Гарячий',data:today_hot,borderColor:'#ff8800',backgroundColor:'#ff8800',tension:0.25,fill:false},
-                        {label:'Холодний',data:today_cold,b
+                        {label:'Холодний',data:today_cold,borderColor:'#33b5ff',backgroundColor:'#33b5ff',tension:0.25,fill:false},
+                        {label:'Гарячий (мин. тижд.)',data:data.hourly_prev.hot,borderColor:'#ff8800',borderDash:[6,4],tension:0.25,fill:false},
+                        {label:'Холодний (мин. тижд.)',data:data.hourly_prev.cold,borderColor:'#33b5ff',borderDash:[6,4],tension:0.25,fill:false}
+                    ]
+                },
+                options:{
+                    responsive:true,
+                    plugins:{
+                        legend:{labels:{color:'#ddd'}},
+                        datalabels:{display:false} // отключаем цифры на линиях
+                    },
+                    scales:{
+                        x:{ticks:{color:'#bbb'},title:{display:true,text:'Час'}},
+                        y:{ticks:{color:'#bbb'},beginAtZero:true}
+                    }
+                }
+            });
+
+            // Часы и погода
+            const now = new Date();
+            document.getElementById('clock').innerText = now.toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'});
+            const w = data.weather||{};
+            let whtml = "";
+            if(w.icon){ whtml += `<img src="https://openweathermap.org/img/wn/${w.icon}@2x.png" style="vertical-align:middle">`; }
+            whtml += ` ${w.temp||'—'}<br>${w.desc||'—'}`;
+            document.getElementById('weather').innerHTML = whtml;
+        }
+        refresh(); setInterval(refresh, 60000);
+        </script>
+    </body>
+    </html>
+    """
+    return render_template_string(template)
+
+if __name__ == "__main__":
+    port = int(os.getenv("PORT", 5000))
+    app.run(host="0.0.0.0", port=port)
