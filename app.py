@@ -168,28 +168,14 @@ def fetch_transactions_hourly(day_offset=0):
             break
         page += 1
 
-    # Накопительные суммы
     hot_cum, cold_cum = [], []
     th, tc = 0, 0
     for h, c in zip(hot_by_hour, cold_by_hour):
-        th += h
-        tc += c
+        th += h; tc += c
         hot_cum.append(th)
         cold_cum.append(tc)
 
     labels = [f"{h:02d}:00" for h in hours]
-
-    # Сегодня → обрезаем по текущему часу
-    if day_offset == 0:
-        current_hour = datetime.now().hour
-        if current_hour >= hours[0]:
-            cut_idx = hours.index(current_hour) + 1 if current_hour in hours else len(hours)
-            hot_cum = hot_cum[:cut_idx]
-            cold_cum = cold_cum[:cut_idx]
-            labels = labels[:cut_idx]
-        else:
-            hot_cum, cold_cum, labels = [], [], []
-
     return {"labels": labels, "hot": hot_cum, "cold": cold_cum}
 
 # ===== Погода =====
@@ -241,123 +227,128 @@ def api_sales():
 @app.route("/")
 def index():
     template = """
-    <!DOCTYPE html>
     <html>
     <head>
         <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <title>Kitchen Dashboard - GRECO</title>
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
-        <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
         <style>
             :root {
-                --bg: #0a0a0a;
-                --panel: #1a1a1a;
-                --panel-alt: #252525;
-                --fg: #ffffff;
-                --fg-secondary: #cccccc;
-                --hot: #ff6b35;
-                --cold: #00d4ff;
-                --bar: #a855f7;
-                --accent: #10b981;
-                --border: #333333;
+                --bg:#0f0f0f; --panel:#151515; --fg:#eee;
+                --hot:#ff8800; --cold:#33b5ff; --bar:#9b59b6;
             }
-            * {margin:0;padding:0;box-sizing:border-box}
-            body {background:var(--bg);color:var(--fg);font-family:'Segoe UI',sans-serif;height:100vh;overflow:hidden;font-size:14px}
-            .dashboard {
-                height: 100vh;
-                display: grid;
-                grid-template-columns: repeat(4,1fr);
-                grid-template-rows: 40% 60%;
-                gap: 8px;
-                padding: 8px;
-            }
-            .card {
-                background: linear-gradient(135deg, var(--panel) 0%, var(--panel-alt) 100%);
-                border: 1px solid var(--border);
-                border-radius: 16px;
-                padding: 10px;
-                display: flex;
-                flex-direction: column;
-                overflow: hidden;
-            }
-            .card h2 {font-size: 16px;font-weight:600;margin-bottom:6px}
-            table{width:100%;border-collapse:collapse;font-size:12px}
-            th,td{padding:3px 6px}
-            th{background:var(--panel-alt);font-size:11px}
-            td{border-bottom:1px solid var(--border);color:var(--fg-secondary)}
-            th:nth-child(2),td:nth-child(2),th:nth-child(3),td:nth-child(3){text-align:right}
-            .chart-card{grid-column:1/-1;grid-row:2}
-            .chart-container{flex:1;position:relative}
-            canvas{max-width:100%!important;max-height:100%!important}
-            .pie-container{flex:1;display:flex;align-items:center;justify-content:center}
-            .weather-card{text-align:center}
-            .clock{font-size:48px;font-weight:700;color:var(--accent);width:80%;margin:0 auto;text-align:center}
-            .weather img{width:70px;height:70px;margin-top:10px}
-            .temp{font-size:24px;font-weight:700;margin-top:8px}
-            .desc{font-size:14px;color:var(--fg-secondary)}
-            .logo{position:fixed;bottom:10px;right:14px;font-weight:800;font-size:18px;color:var(--accent)}
+            body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif}
+            .wrap{padding:10px;max-width:1800px;margin:0 auto}
+            .row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:10px}
+            .card{background:var(--panel);border-radius:12px;padding:10px 14px;}
+            .card.chart{grid-column:1/-1;height:420px}
+            table{width:100%;border-collapse:collapse;font-size:16px}
+            th,td{padding:3px 6px;text-align:right}
+            th:first-child,td:first-child{text-align:left}
+            .logo{position:fixed;right:18px;bottom:12px;font-weight:800}
+            canvas{max-width:100%}
         </style>
     </head>
     <body>
-        <div class="dashboard">
-            <div class="card"><h2>🔥 Гарячий цех</h2><table id="hot_tbl"></table></div>
-            <div class="card"><h2>❄️ Холодний цех</h2><table id="cold_tbl"></table></div>
-            <div class="card"><h2>📊 Розподіл замовлень</h2><div class="pie-container"><canvas id="pie"></canvas></div></div>
-            <div class="card weather-card">
-                <h2>🕐 Час і погода</h2>
-                <div class="clock" id="clock">00:00</div>
-                <div id="weather"></div>
+        <div class="wrap">
+            <div class="row">
+                <div class="card hot"><h2>🔥 Гарячий цех</h2><table id="hot_tbl"></table></div>
+                <div class="card cold"><h2>❄️ Холодний цех</h2><table id="cold_tbl"></table></div>
+                <div class="card share"><h2>📊 Розподіл замовлень</h2><canvas id="pie" height="180"></canvas></div>
+                <div class="card weather"><h2>🕒 Час і погода</h2>
+                    <div id="clock" style="font-size:32px;margin-top:10px"></div>
+                    <div id="weather" style="margin-top:10px;font-size:18px"></div>
+                </div>
+                <div class="card chart"><h2>📈 Замовлення по годинах (накопич.)</h2><canvas id="chart"></canvas></div>
             </div>
-            <div class="card chart-card"><h2>📈 Замовлення по годинах (накопич.)</h2><div class="chart-container"><canvas id="chart"></canvas></div></div>
         </div>
         <div class="logo">GRECO</div>
 
         <script>
-        let chart,pie;
-        async function refresh(){
-            const r=await fetch('/api/sales');const data=await r.json();
-            function fill(id,today,prev){
-                const el=document.getElementById(id);
-                let html="<tr><th>Категорія</th><th>Сьогодні</th><th>Мин. тиждень</th></tr>";
-                const keys=new Set([...Object.keys(today),...Object.keys(prev)]);
-                keys.forEach(k=>{html+=`<tr><td>${k}</td><td>${today[k]||0}</td><td>${prev[k]||0}</td></tr>`});
-                el.innerHTML=html;
-            }
-            fill('hot_tbl',data.hot||{},data.hot_prev||{});
-            fill('cold_tbl',data.cold||{},data.cold_prev||{});
-            const ctx2=document.getElementById('pie').getContext('2d');
-            if(pie) pie.destroy();
-            pie=new Chart(ctx2,{
-                type:'pie',
-                data:{labels:['Бар','Гор. цех','Хол. цех'],
-                      datasets:[{data:[data.share.bar,data.share.hot,data.share.cold],backgroundColor:['#a855f7','#ff6b35','#00d4ff']}]},
-                options:{plugins:{legend:{display:false},
-                        datalabels:{color:'#fff',font:{weight:'bold',size:14},
-                        formatter:(val,ctx)=>ctx.chart.data.labels[ctx.dataIndex]+" "+val+"%"}}},
-                plugins:[ChartDataLabels]
-            });
-            const ctx=document.getElementById('chart').getContext('2d');
-            if(chart) chart.destroy();
-            chart=new Chart(ctx,{type:'line',
-                data:{labels:data.hourly.labels,
-                      datasets:[
-                        {label:'Гарячий',data:data.hourly.hot,borderColor:'#ff6b35',tension:0.3,fill:false},
-                        {label:'Холодний',data:data.hourly.cold,borderColor:'#00d4ff',tension:0.3,fill:false},
-                        {label:'Гарячий (мин. тижд.)',data:data.hourly_prev.hot,borderColor:'#ff6b35',borderDash:[6,4],tension:0.3,fill:false},
-                        {label:'Холодний (мин. тижд.)',data:data.hourly_prev.cold,borderColor:'#00d4ff',borderDash:[6,4],tension:0.3,fill:false}]},
-                options:{responsive:true,maintainAspectRatio:false,plugins:{legend:{labels:{color:'#ccc'}}},
-                         scales:{x:{ticks:{color:'#ccc'}},y:{ticks:{color:'#ccc'},beginAtZero:true}}}
-            });
-            const now=new Date();
-            document.getElementById('clock').textContent=now.toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'});
-            const w=data.weather||{};let whtml="";
-            if(w.icon) whtml+=`<img src="https://openweathermap.org/img/wn/${w.icon}@2x.png">`;
-            whtml+=`<div class="temp">${w.temp||'—'}</div><div class="desc">${w.desc||'—'}</div>`;
-            document.getElementById('weather').innerHTML=whtml;
+        let chart, pie;
+
+        function cutToNow(labels, arr){
+            const now = new Date();
+            const curHour = now.getHours();
+            let cutIndex = labels.findIndex(l => parseInt(l) > curHour);
+            if(cutIndex === -1) cutIndex = labels.length;
+            return arr.slice(0, cutIndex);
         }
-        refresh();setInterval(refresh,60000);
-        setInterval(()=>{document.getElementById('clock').textContent=new Date().toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'});},1000);
+
+        async function refresh(){
+            const r = await fetch('/api/sales');
+            const data = await r.json();
+
+            // Таблицы
+            function fill(id, today, prev){
+                const el = document.getElementById(id);
+                let html = "<tr><th>Категорія</th><th>Сьогодні</th><th>Мин. тиждень</th></tr>";
+                const keys = new Set([...Object.keys(today), ...Object.keys(prev)]);
+                keys.forEach(k => {
+                    html += `<tr><td>${k}</td><td>${today[k]||0}</td><td>${prev[k]||0}</td></tr>`;
+                });
+                el.innerHTML = html;
+            }
+            fill('hot_tbl', data.hot||{}, data.hot_prev||{});
+            fill('cold_tbl', data.cold||{}, data.cold_prev||{});
+
+            // Круговая диаграмма
+            const ctx2 = document.getElementById('pie').getContext('2d');
+            if(pie) pie.destroy();
+            pie = new Chart(ctx2,{
+                type:'pie',
+                data:{
+                    labels:['Гарячий','Холодний','Бар'],
+                    datasets:[{
+                        data:[data.share.hot,data.share.cold,data.share.bar],
+                        backgroundColor:['#ff8800','#33b5ff','#9b59b6']
+                    }]
+                },
+                options:{
+                    plugins:{
+                        legend:{display:false},
+                        tooltip:{enabled:false},
+                        datalabels:{display:true}
+                    }
+                }
+            });
+
+            // Линейная диаграмма
+            let today_hot = cutToNow(data.hourly.labels, data.hourly.hot);
+            let today_cold = cutToNow(data.hourly.labels, data.hourly.cold);
+
+            const ctx = document.getElementById('chart').getContext('2d');
+            if(chart) chart.destroy();
+            chart = new Chart(ctx,{
+                type:'line',
+                data:{
+                    labels:data.hourly.labels,
+                    datasets:[
+                        {label:'Гарячий',data:today_hot,borderColor:'#ff8800',backgroundColor:'#ff8800',tension:0.25,fill:false},
+                        {label:'Холодний',data:today_cold,borderColor:'#33b5ff',backgroundColor:'#33b5ff',tension:0.25,fill:false},
+                        {label:'Гарячий (мин. тижд.)',data:data.hourly_prev.hot,borderColor:'#ff8800',borderDash:[6,4],tension:0.25,fill:false},
+                        {label:'Холодний (мин. тижд.)',data:data.hourly_prev.cold,borderColor:'#33b5ff',borderDash:[6,4],tension:0.25,fill:false}
+                    ]
+                },
+                options:{
+                    responsive:true,
+                    plugins:{legend:{labels:{color:'#ddd'}}},
+                    scales:{
+                        x:{ticks:{color:'#bbb'},title:{display:true,text:'Час'}},
+                        y:{ticks:{color:'#bbb'},beginAtZero:true}
+                    }
+                }
+            });
+
+            // Часы и погода
+            const now = new Date();
+            document.getElementById('clock').innerText = now.toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'});
+            const w = data.weather||{};
+            let whtml = "";
+            if(w.icon){ whtml += `<img src="https://openweathermap.org/img/wn/${w.icon}@2x.png" style="vertical-align:middle">`; }
+            whtml += ` ${w.temp||'—'}<br>${w.desc||'—'}`;
+            document.getElementById('weather').innerHTML = whtml;
+        }
+        refresh(); setInterval(refresh, 60000);
         </script>
     </body>
     </html>
