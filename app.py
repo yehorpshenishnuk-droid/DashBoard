@@ -18,10 +18,14 @@ HOT_CATEGORIES  = {4, 13, 15, 46, 33}
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 BAR_CATEGORIES  = {9,14,27,28,34,41,42,47,22,24,25,26,39,30}
 
+# Схема столов
+HALL_TABLES = [1,2,3,4,5,6,8]
+TERRACE_TABLES = [7,10,11,12,13]
+
 # Кэш
 PRODUCT_CACHE = {}
 PRODUCT_CACHE_TS = 0
-CACHE = {"hot": {}, "cold": {}, "hot_prev": {}, "cold_prev": {}, "hourly": {}, "hourly_prev": {}, "share": {}, "tables": []}
+CACHE = {"hot": {}, "cold": {}, "hot_prev": {}, "cold_prev": {}, "hourly": {}, "hourly_prev": {}, "share": {}, "tables": {}}
 CACHE_TS = 0
 
 # ===== Helpers =====
@@ -194,7 +198,7 @@ def fetch_weather():
         print("ERROR weather:", e, file=sys.stderr, flush=True)
         return {"temp": "Н/Д", "desc": "Н/Д", "icon": ""}
 
-# ===== СТАТУС СТОЛОВ =====
+# ===== Столы и официанты =====
 def fetch_tables_with_waiters():
     target_date = date.today().strftime("%Y%m%d")
     url = (
@@ -206,18 +210,35 @@ def fetch_tables_with_waiters():
         rows = resp.json().get("response", [])
     except Exception as e:
         print("ERROR tables_with_waiters:", e, file=sys.stderr, flush=True)
-        return []
+        rows = []
 
-    tables = []
+    active = {}
     for trx in rows:
         try:
-            tid = trx.get("table_id")
-            tname = trx.get("table_name", f"Стол {tid}")
-            waiter = trx.get("name", "—")  # имя официанта
-            tables.append({"id": tid, "name": tname, "waiter": waiter})
+            tid = int(trx.get("table_id", 0))
+            waiter = trx.get("name", "—")
+            active[tid] = waiter
         except Exception:
             continue
-    return tables
+
+    hall = []
+    terrace = []
+    for tid in HALL_TABLES:
+        hall.append({
+            "id": tid,
+            "name": f"Стол {tid}",
+            "waiter": active.get(tid, ""),
+            "occupied": tid in active
+        })
+    for tid in TERRACE_TABLES:
+        terrace.append({
+            "id": tid,
+            "name": f"Стол {tid}",
+            "waiter": active.get(tid, ""),
+            "occupied": tid in active
+        })
+
+    return {"hall": hall, "terrace": terrace}
 
 # ===== API =====
 @app.route("/api/sales")
@@ -273,6 +294,30 @@ def index():
             th:first-child,td:first-child{text-align:left}
             .logo{position:fixed;right:18px;bottom:12px;font-weight:800}
             canvas{max-width:100%}
+            .tables-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
+                gap: 10px;
+                margin-top: 10px;
+            }
+            .table-card {
+                border-radius: 10px;
+                padding: 12px;
+                text-align: center;
+                font-size: 16px;
+                font-weight: bold;
+                background: #555;
+                color: #fff;
+            }
+            .table-card.occupied {
+                background: #4fc3f7;
+                color: #000;
+            }
+            .table-card .waiter {
+                font-size: 14px;
+                font-weight: normal;
+                margin-top: 4px;
+            }
         </style>
     </head>
     <body>
@@ -286,7 +331,12 @@ def index():
                     <div id="weather" style="margin-top:10px;font-size:18px"></div>
                 </div>
                 <div class="card chart"><h2>📈 Замовлення по годинах (накопич.)</h2><canvas id="chart"></canvas></div>
-                <div class="card tables"><h2>🍽️ Столи</h2><table id="tables_tbl"></table></div>
+                <div class="card tables">
+                    <h2>🍽️ Зал</h2>
+                    <div id="tables_hall" class="tables-grid"></div>
+                    <h2 style="margin-top:15px">🌿 Літня тераса</h2>
+                    <div id="tables_terrace" class="tables-grid"></div>
+                </div>
             </div>
         </div>
         <div class="logo">GRECO</div>
@@ -306,7 +356,7 @@ def index():
             const r = await fetch('/api/sales');
             const data = await r.json();
 
-            // Таблицы
+            // Таблицы продаж
             function fill(id, today, prev){
                 const el = document.getElementById(id);
                 let html = "<tr><th>Категорія</th><th>Сьогодні</th><th>Мин. тиждень</th></tr>";
@@ -319,16 +369,23 @@ def index():
             fill('hot_tbl', data.hot||{}, data.hot_prev||{});
             fill('cold_tbl', data.cold||{}, data.cold_prev||{});
 
-            // Таблица столов
-            function fillTables(tables){
-                const el = document.getElementById('tables_tbl');
-                let html = "<tr><th>ID</th><th>Стол</th><th>Офіціант</th></tr>";
+            // Столы
+            function renderTables(containerId, tables){
+                const el = document.getElementById(containerId);
+                let html = "";
                 tables.forEach(t => {
-                    html += `<tr><td>${t.id}</td><td>${t.name}</td><td>${t.waiter}</td></tr>`;
+                    const cls = t.occupied ? "table-card occupied" : "table-card";
+                    const waiter = t.waiter || "—";
+                    html += `
+                      <div class="${cls}">
+                        <div>${t.name}</div>
+                        <div class="waiter">${waiter}</div>
+                      </div>`;
                 });
                 el.innerHTML = html;
             }
-            fillTables(data.tables || []);
+            renderTables("tables_hall", data.tables?.hall || []);
+            renderTables("tables_terrace", data.tables?.terrace || []);
 
             // Круговая диаграмма
             Chart.register(ChartDataLabels);
