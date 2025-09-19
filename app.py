@@ -226,9 +226,6 @@ def fetch_tables_with_waiters():
         except Exception:
             continue
 
-    # Debug log
-    print("DEBUG OPEN TABLES:", active, file=sys.stderr, flush=True)
-
     def build(zone_numbers):
         out = []
         for tnum in zone_numbers:
@@ -269,13 +266,15 @@ def api_sales():
             "hot_prev": sums_prev["hot"], "cold_prev": sums_prev["cold"],
             "hourly": hourly, "hourly_prev": prev,
             "share": share, "weather": fetch_weather()
-            # "tables" убран из кеша
         })
         CACHE_TS = time.time()
 
-    # ⚡ столы обновляем всегда (не кешируем)
-    CACHE["tables"] = fetch_tables_with_waiters()
+    # столы сюда не кешируем
     return jsonify(CACHE)
+
+@app.route("/api/tables")
+def api_tables():
+    return jsonify(fetch_tables_with_waiters())
 
 # ===== UI =====
 @app.route("/")
@@ -350,7 +349,6 @@ def index():
             const r = await fetch('/api/sales');
             const data = await r.json();
 
-            // Таблицы
             function fill(id, today, prev){
                 const el = document.getElementById(id);
                 let html = "<tr><th>Категорія</th><th>Сьогодні</th><th>Мин. тиждень</th></tr>";
@@ -363,7 +361,6 @@ def index():
             fill('hot_tbl', data.hot||{}, data.hot_prev||{});
             fill('cold_tbl', data.cold||{}, data.cold_prev||{});
 
-            // Диаграмма пай
             Chart.register(ChartDataLabels);
             const ctx2 = document.getElementById('pie').getContext('2d');
             if(pie) pie.destroy();
@@ -392,7 +389,6 @@ def index():
                 }
             });
 
-            // Линия
             let today_hot = cutToNow(data.hourly.labels, data.hourly.hot);
             let today_cold = cutToNow(data.hourly.labels, data.hourly.cold);
 
@@ -422,7 +418,6 @@ def index():
                 }
             });
 
-            // Часы и погода
             const now = new Date();
             document.getElementById('clock').innerText = now.toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'});
             const w = data.weather||{};
@@ -430,12 +425,17 @@ def index():
             if(w.icon){ whtml += `<img src="https://openweathermap.org/img/wn/${w.icon}@2x.png" style="vertical-align:middle">`; }
             whtml += ` ${w.temp||'—'}<br>${w.desc||'—'}`;
             document.getElementById('weather').innerHTML = whtml;
-
-            // Столы
-            renderTables('hall', data.tables.hall||[]);
-            renderTables('terrace', data.tables.terrace||[]);
         }
+
+        async function refreshTables(){
+            const r = await fetch('/api/tables');
+            const data = await r.json();
+            renderTables('hall', data.hall||[]);
+            renderTables('terrace', data.terrace||[]);
+        }
+
         refresh(); setInterval(refresh, 60000);
+        refreshTables(); setInterval(refreshTables, 30000);
         </script>
     </body>
     </html>
