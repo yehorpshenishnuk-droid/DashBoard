@@ -168,7 +168,7 @@ def fetch_transactions_hourly(day_offset=0):
             break
         page += 1
 
-    # === кумулятивное накопление ===
+    # === Кумулятивное накопление ===
     hot_cum, cold_cum = [], []
     th, tc = 0, 0
     for h, c in zip(hot_by_hour, cold_by_hour):
@@ -178,14 +178,17 @@ def fetch_transactions_hourly(day_offset=0):
 
     labels = [f"{h:02d}:00" for h in hours]
 
-    # === ОБРЕЗАНИЕ по текущему времени только для day_offset=0 ===
+    # === ОБРЕЗКА для сегодняшнего дня ===
     if day_offset == 0:
         now_hour = datetime.now().hour
-        if now_hour >= min(hours):
-            cut_idx = max([i for i, h in enumerate(hours) if h <= now_hour])
-            labels = labels[:cut_idx+1]
-            hot_cum = hot_cum[:cut_idx+1]
-            cold_cum = cold_cum[:cut_idx+1]
+        valid_idx = [i for i, h in enumerate(hours) if h <= now_hour]
+        if valid_idx:
+            last = max(valid_idx)
+            labels = labels[:last+1]
+            hot_cum = hot_cum[:last+1]
+            cold_cum = cold_cum[:last+1]
+        else:
+            labels, hot_cum, cold_cum = [], [], []
 
     return {"labels": labels, "hot": hot_cum, "cold": cold_cum}
 
