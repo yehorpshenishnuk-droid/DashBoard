@@ -168,6 +168,7 @@ def fetch_transactions_hourly(day_offset=0):
             break
         page += 1
 
+    # === кумулятивное накопление ===
     hot_cum, cold_cum = [], []
     th, tc = 0, 0
     for h, c in zip(hot_by_hour, cold_by_hour):
@@ -176,6 +177,16 @@ def fetch_transactions_hourly(day_offset=0):
         cold_cum.append(tc)
 
     labels = [f"{h:02d}:00" for h in hours]
+
+    # === ОБРЕЗАНИЕ по текущему времени только для day_offset=0 ===
+    if day_offset == 0:
+        now_hour = datetime.now().hour
+        if now_hour >= min(hours):
+            cut_idx = max([i for i, h in enumerate(hours) if h <= now_hour])
+            labels = labels[:cut_idx+1]
+            hot_cum = hot_cum[:cut_idx+1]
+            cold_cum = cold_cum[:cut_idx+1]
+
     return {"labels": labels, "hot": hot_cum, "cold": cold_cum}
 
 # ===== Погода =====
@@ -277,6 +288,7 @@ def index():
             .chart-container{flex:1;position:relative}
             canvas{max-width:100%!important;max-height:100%!important}
             .pie-container{flex:1;display:flex;align-items:center;justify-content:center}
+            .pie-container canvas{max-width:80%!important;max-height:80%!important} /* уменьшили диаграмму */
             .weather-card{text-align:center}
             .clock{font-size:48px;font-weight:700;color:var(--accent);width:80%;margin:0 auto;text-align:center}
             .weather img{width:70px;height:70px;margin-top:10px}
