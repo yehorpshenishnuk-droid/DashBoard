@@ -421,4 +421,6 @@ def index():
 
             // Часы и погода
             const now = new Date();
-            document.getElement
+            document.getElementById('clock').innerText = now.toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'});
+            const w = data.weather||{};
+            let whtml =
