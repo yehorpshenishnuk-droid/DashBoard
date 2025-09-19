@@ -180,11 +180,8 @@ def fetch_transactions_hourly(day_offset=0):
     # === Новая логика: обрезка сегодняшних данных по текущему часу ===
     if day_offset == 0:
         current_hour = datetime.now().hour
-        if current_hour >= 10:
-            cut_idx = max(
-                0,
-                min(len(hours), hours.index(current_hour) + 1 if current_hour in hours else len(hours))
-            )
+        if current_hour in hours:
+            cut_idx = hours.index(current_hour) + 1
             hot_cum = hot_cum[:cut_idx]
             cold_cum = cold_cum[:cut_idx]
             labels = labels[:cut_idx]
