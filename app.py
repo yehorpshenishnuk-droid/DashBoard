@@ -281,272 +281,390 @@ def index():
     <html>
     <head>
         <meta charset="utf-8" />
-        <meta name="viewport" content="width=device-width, initial-scale=1.0">
-        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
+        <meta name="viewport" content="width=device-width, initial-scale=1.0" />
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700&display=swap" rel="stylesheet">
         <style>
+            :root {
+                --bg: #1a1a1a;
+                --surface: #2a2a2a;
+                --surface-hover: #3a3a3a;
+                --border: rgba(255, 255, 255, 0.1);
+                --text-primary: #ffffff;
+                --text-secondary: #a0a0a0;
+                --hot: #ff6b35;
+                --cold: #007aff;
+                --bar: #af52de;
+                --success: #34c759;
+                --warning: #ffcc02;
+                --glass: rgba(42, 42, 42, 0.8);
+            }
+
             * {
+                box-sizing: border-box;
                 margin: 0;
                 padding: 0;
-                box-sizing: border-box;
-            }
-            
-            :root {
-                --bg-primary: #1c1c1e;
-                --bg-secondary: #2c2c2e;
-                --bg-tertiary: #3a3a3c;
-                --text-primary: #ffffff;
-                --text-secondary: #98989d;
-                --accent-hot: #ff6b35;
-                --accent-cold: #007aff;
-                --accent-bar: #af52de;
-                --border-color: rgba(84, 84, 88, 0.65);
-                --glass-bg: rgba(44, 44, 46, 0.8);
             }
 
             body {
-                background: var(--bg-primary);
+                background: var(--bg);
                 color: var(--text-primary);
                 font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                font-weight: 400;
+                overflow-x: hidden;
                 height: 100vh;
-                overflow: hidden;
-                font-size: 14px;
             }
 
-            .dashboard {
+            .container {
                 height: 100vh;
                 padding: 16px;
+                display: flex;
+                flex-direction: column;
+                gap: 16px;
+                max-width: 1920px;
+                margin: 0 auto;
+            }
+
+            /* Top Row - Compact */
+            .top-row {
                 display: grid;
-                grid-template-columns: 1fr 1fr 1fr 1fr;
-                grid-template-rows: 1fr 1.8fr 1fr;
+                grid-template-columns: 1fr 1fr 300px 280px;
+                gap: 16px;
+                height: 240px;
+            }
+
+            /* Bottom Row - Chart 70%, Tables 30% */
+            .bottom-row {
+                display: grid;
+                grid-template-columns: 70fr 30fr;
+                gap: 16px;
+                flex: 1;
+                min-height: 0;
+            }
+
+            .chart-section {
+                display: flex;
+                flex-direction: column;
+            }
+
+            .tables-section {
+                display: grid;
+                grid-template-rows: 1fr 1fr;
                 gap: 16px;
             }
 
             .card {
-                background: var(--bg-secondary);
-                border: 1px solid var(--border-color);
+                background: var(--surface);
+                border: 1px solid var(--border);
                 border-radius: 16px;
                 padding: 20px;
                 backdrop-filter: blur(20px);
+                transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
                 position: relative;
                 overflow: hidden;
+            }
+
+            .card:hover {
+                background: var(--surface-hover);
+                transform: translateY(-2px);
                 box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
             }
 
-            .card::before {
-                content: '';
-                position: absolute;
-                top: 0;
-                left: 0;
-                right: 0;
-                height: 1px;
-                background: linear-gradient(90deg, transparent, rgba(255, 255, 255, 0.1), transparent);
-            }
-
-            .card h2 {
+            .card-title {
                 font-size: 16px;
                 font-weight: 600;
                 margin-bottom: 16px;
-                color: var(--text-primary);
                 display: flex;
                 align-items: center;
                 gap: 8px;
+                color: var(--text-primary);
             }
 
-            .card-hot { grid-column: 1; grid-row: 1; }
-            .card-cold { grid-column: 2; grid-row: 1; }
-            .card-share { grid-column: 3; grid-row: 1; }
-            .card-time { grid-column: 4; grid-row: 1; }
-            .card-chart { grid-column: 1 / -1; grid-row: 2; }
-            .card-hall { grid-column: 1 / 3; grid-row: 3; }
-            .card-terrace { grid-column: 3 / 5; grid-row: 3; }
+            .card-title .emoji {
+                font-size: 18px;
+            }
 
-            /* Таблицы */
+            /* Tables Styling */
+            .table-container {
+                max-height: 180px;
+                overflow-y: auto;
+            }
+
             table {
                 width: 100%;
                 border-collapse: collapse;
                 font-size: 13px;
-            }
-
-            th, td {
-                padding: 8px 4px;
-                text-align: right;
-                border-bottom: 1px solid rgba(84, 84, 88, 0.3);
-            }
-
-            th:first-child, td:first-child {
-                text-align: left;
+                font-weight: 400;
             }
 
             th {
                 color: var(--text-secondary);
                 font-weight: 500;
+                padding: 8px 0;
+                text-align: left;
+                border-bottom: 1px solid var(--border);
                 font-size: 12px;
                 text-transform: uppercase;
                 letter-spacing: 0.5px;
             }
 
             td {
-                color: var(--text-primary);
-                font-weight: 500;
+                padding: 10px 0;
+                border-bottom: 1px solid rgba(255, 255, 255, 0.05);
+                transition: background-color 0.2s ease;
             }
 
-            /* Часы и погода */
-            .time-display {
+            th:last-child, td:last-child {
+                text-align: right;
+            }
+
+            tr:hover td {
+                background: rgba(255, 255, 255, 0.03);
+            }
+
+            /* Chart Container */
+            .chart-container {
+                flex: 1;
+                position: relative;
+                min-height: 0;
+                padding-top: 12px;
+            }
+
+            .chart-container canvas {
+                max-width: 100% !important;
+                height: auto !important;
+            }
+
+            /* Weather & Clock */
+            .weather-content {
                 display: flex;
                 flex-direction: column;
                 align-items: center;
-                justify-content: center;
-                height: calc(100% - 50px);
+                text-align: center;
+                gap: 12px;
             }
 
-            #clock {
+            .clock {
                 font-size: 48px;
-                font-weight: 700;
+                font-weight: 300;
                 color: var(--text-primary);
-                margin-bottom: 16px;
-                font-variant-numeric: tabular-nums;
+                letter-spacing: -0.02em;
             }
 
-            #weather {
+            .weather-info {
                 display: flex;
                 align-items: center;
                 gap: 8px;
                 font-size: 16px;
                 color: var(--text-secondary);
-                text-align: center;
             }
 
-            /* Диаграммы */
-            canvas {
-                max-width: 100%;
-                max-height: 100%;
+            .weather-info img {
+                width: 32px;
+                height: 32px;
             }
 
-            .chart-container {
-                height: calc(100% - 50px);
-                position: relative;
+            /* Pie Chart */
+            .pie-container {
+                height: 180px;
+                display: flex;
+                justify-content: center;
+                align-items: center;
             }
 
-            /* Столы */
+            /* Tables Grid */
             .tables-grid {
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(120px, 1fr));
+                grid-template-columns: repeat(auto-fit, minmax(100px, 1fr));
                 gap: 12px;
-                height: calc(100% - 50px);
-                align-content: start;
+                margin-top: 12px;
             }
 
             .table-tile {
-                background: var(--bg-tertiary);
-                border: 1px solid var(--border-color);
+                padding: 16px 12px;
                 border-radius: 12px;
-                padding: 16px;
                 text-align: center;
-                font-weight: 600;
-                font-size: 14px;
-                transition: all 0.3s cubic-bezier(0.4, 0, 0.2, 1);
-                position: relative;
-                overflow: hidden;
+                font-weight: 500;
+                font-size: 13px;
+                transition: all 0.3s cubic-bezier(0.25, 0.46, 0.45, 0.94);
+                border: 1px solid var(--border);
             }
 
             .table-tile.occupied {
-                background: linear-gradient(135deg, var(--accent-cold), #0056b3);
+                background: var(--cold);
                 color: white;
-                box-shadow: 0 4px 20px rgba(0, 122, 255, 0.3);
+                box-shadow: 0 4px 16px rgba(0, 122, 255, 0.3);
             }
 
             .table-tile.free {
-                background: var(--bg-tertiary);
+                background: rgba(255, 255, 255, 0.05);
                 color: var(--text-secondary);
             }
 
-            .table-name {
-                font-size: 16px;
-                margin-bottom: 4px;
+            .table-tile:hover {
+                transform: translateY(-2px);
+                box-shadow: 0 6px 20px rgba(0, 0, 0, 0.2);
             }
 
-            .table-waiter {
-                font-size: 12px;
+            /* Logo */
+            .logo {
+                position: fixed;
+                right: 24px;
+                bottom: 20px;
+                font-family: 'Inter', sans-serif;
+                font-weight: 600;
+                font-size: 14px;
+                color: var(--text-primary);
+                letter-spacing: 0.5px;
+                z-index: 1000;
                 opacity: 0.8;
             }
 
-            /* Логотип */
-            .logo {
-                position: fixed;
-                bottom: 20px;
-                right: 24px;
-                font-family: 'Inter', sans-serif;
-                font-weight: 800;
-                font-size: 18px;
-                color: var(--text-primary);
-                opacity: 0.6;
+            /* Responsive Design */
+            @media (max-width: 1600px) {
+                .top-row {
+                    grid-template-columns: 1fr 1fr 280px 260px;
+                    height: 220px;
+                }
+                .card-title {
+                    font-size: 15px;
+                }
+                .clock {
+                    font-size: 42px;
+                }
             }
 
-            /* Эмодзи стили */
-            .emoji {
-                font-size: 20px;
-                margin-right: 4px;
+            @media (max-width: 1200px) {
+                .container {
+                    padding: 12px;
+                    gap: 12px;
+                }
+                .top-row {
+                    grid-template-columns: 1fr 1fr;
+                    grid-template-rows: 1fr 1fr;
+                    height: 440px;
+                }
+                .bottom-row {
+                    grid-template-columns: 1fr;
+                    grid-template-rows: 2fr 1fr;
+                }
+                .tables-section {
+                    grid-template-columns: 1fr 1fr;
+                    grid-template-rows: 1fr;
+                }
+                .clock {
+                    font-size: 36px;
+                }
             }
 
-            /* Анимации */
-            @keyframes fadeIn {
-                from { opacity: 0; transform: translateY(10px); }
-                to { opacity: 1; transform: translateY(0); }
+            /* Custom Scrollbar */
+            ::-webkit-scrollbar {
+                width: 6px;
             }
 
-            .card {
-                animation: fadeIn 0.6s cubic-bezier(0.4, 0, 0.2, 1) forwards;
+            ::-webkit-scrollbar-track {
+                background: var(--bg);
+            }
+
+            ::-webkit-scrollbar-thumb {
+                background: var(--surface);
+                border-radius: 3px;
+            }
+
+            ::-webkit-scrollbar-thumb:hover {
+                background: var(--surface-hover);
+            }
+
+            /* Chart styling improvements */
+            .chart-title {
+                margin-bottom: 4px;
             }
         </style>
     </head>
     <body>
-        <div class="dashboard">
-            <div class="card card-hot">
-                <h2><span class="emoji">🔥</span>Гарячий цех</h2>
-                <table id="hot_tbl"></table>
-            </div>
+        <div class="container">
+            <!-- Top Row -->
+            <div class="top-row">
+                <div class="card">
+                    <div class="card-title">
+                        <span class="emoji">🔥</span>
+                        Гарячий цех
+                    </div>
+                    <div class="table-container">
+                        <table id="hot_tbl"></table>
+                    </div>
+                </div>
 
-            <div class="card card-cold">
-                <h2><span class="emoji">❄️</span>Холодний цех</h2>
-                <table id="cold_tbl"></table>
-            </div>
+                <div class="card">
+                    <div class="card-title">
+                        <span class="emoji">❄️</span>
+                        Холодний цех
+                    </div>
+                    <div class="table-container">
+                        <table id="cold_tbl"></table>
+                    </div>
+                </div>
 
-            <div class="card card-share">
-                <h2><span class="emoji">📊</span>Розподіл замовлень</h2>
-                <div class="chart-container">
-                    <canvas id="pie"></canvas>
+                <div class="card">
+                    <div class="card-title">
+                        <span class="emoji">📊</span>
+                        Розподіл замовлень
+                    </div>
+                    <div class="pie-container">
+                        <canvas id="pie" width="260" height="180"></canvas>
+                    </div>
+                </div>
+
+                <div class="card">
+                    <div class="card-title">
+                        <span class="emoji">🕐</span>
+                        Час і погода
+                    </div>
+                    <div class="weather-content">
+                        <div id="clock" class="clock"></div>
+                        <div id="weather" class="weather-info"></div>
+                    </div>
                 </div>
             </div>
 
-            <div class="card card-time">
-                <h2><span class="emoji">🕐</span>Час і погода</h2>
-                <div class="time-display">
-                    <div id="clock"></div>
-                    <div id="weather"></div>
+            <!-- Bottom Row -->
+            <div class="bottom-row">
+                <!-- Chart Section (70%) -->
+                <div class="chart-section">
+                    <div class="card" style="flex: 1; display: flex; flex-direction: column;">
+                        <div class="card-title chart-title">
+                            <span class="emoji">📈</span>
+                            Замовлення по годинам (накопич.)
+                        </div>
+                        <div class="chart-container">
+                            <canvas id="chart"></canvas>
+                        </div>
+                    </div>
                 </div>
-            </div>
 
-            <div class="card card-chart">
-                <h2><span class="emoji">📈</span>Замовлення по годинам (накопич.)</h2>
-                <div class="chart-container">
-                    <canvas id="chart"></canvas>
+                <!-- Tables Section (30%) -->
+                <div class="tables-section">
+                    <div class="card">
+                        <div class="card-title">
+                            <span class="emoji">🍴</span>
+                            Зал
+                        </div>
+                        <div id="hall" class="tables-grid"></div>
+                    </div>
+
+                    <div class="card">
+                        <div class="card-title">
+                            <span class="emoji">🌿</span>
+                            Літня тераса
+                        </div>
+                        <div id="terrace" class="tables-grid"></div>
+                    </div>
                 </div>
-            </div>
-
-            <div class="card card-hall">
-                <h2><span class="emoji">🍽️</span>Зал</h2>
-                <div id="hall" class="tables-grid"></div>
-            </div>
-
-            <div class="card card-terrace">
-                <h2><span class="emoji">🌿</span>Літня тераса</h2>
-                <div id="terrace" class="tables-grid"></div>
             </div>
         </div>
-        
-        <div class="logo">GRECO Tech™</div>
+
+        <div class="logo">GRECO Tech ™</div>
 
         <script>
         let chart, pie;
@@ -565,10 +683,7 @@ def index():
             data.forEach(t=>{
                 const div = document.createElement("div");
                 div.className = "table-tile " + (t.occupied ? "occupied":"free");
-                div.innerHTML = `
-                    <div class="table-name">${t.name}</div>
-                    <div class="table-waiter">${t.waiter}</div>
-                `;
+                div.innerHTML = `<div style="font-weight: 600; margin-bottom: 4px;">${t.name}</div><div style="font-size: 11px; opacity: 0.8;">${t.waiter}</div>`;
                 el.appendChild(div);
             });
         }
@@ -590,19 +705,19 @@ def index():
             fill('hot_tbl', data.hot||{}, data.hot_prev||{});
             fill('cold_tbl', data.cold||{}, data.cold_prev||{});
 
-            // Диаграмма пай с подписями
+            // Диаграмма пай
             Chart.register(ChartDataLabels);
             const ctx2 = document.getElementById('pie').getContext('2d');
             if(pie) pie.destroy();
             pie = new Chart(ctx2,{
-                type:'doughnut',
+                type:'pie',
                 data:{
                     labels:['Гарячий цех','Холодний цех','Бар'],
                     datasets:[{
                         data:[data.share.hot,data.share.cold,data.share.bar],
                         backgroundColor:['#ff6b35','#007aff','#af52de'],
-                        borderWidth: 0,
-                        cutout: '50%'
+                        borderWidth: 2,
+                        borderColor: '#2a2a2a'
                     }]
                 },
                 options:{
@@ -613,11 +728,10 @@ def index():
                         tooltip:{enabled:false},
                         datalabels:{
                             color:'#ffffff',
-                            font:{weight:'bold', size:14, family: 'Inter'},
+                            font:{weight:'600', size:14, family: 'Inter'},
                             formatter:function(value, context){
-                                if(value === 0) return '';
                                 const label = context.chart.data.labels[context.dataIndex];
-                                return label.split(' ')[0] + '\\n' + value + '%';
+                                return label + '\n' + value + '%';
                             },
                             textAlign: 'center'
                         }
@@ -625,7 +739,7 @@ def index():
                 }
             });
 
-            // Линейный график
+            // Линия
             let today_hot = cutToNow(data.hourly.labels, data.hourly.hot);
             let today_cold = cutToNow(data.hourly.labels, data.hourly.cold);
 
@@ -643,11 +757,9 @@ def index():
                             backgroundColor:'rgba(255, 107, 53, 0.1)',
                             tension:0.4,
                             fill:false,
-                            borderWidth: 3,
-                            pointBackgroundColor: '#ff6b35',
-                            pointBorderColor: '#ffffff',
-                            pointBorderWidth: 2,
-                            pointRadius: 4
+                            pointRadius: 4,
+                            pointHoverRadius: 6,
+                            borderWidth: 3
                         },
                         {
                             label:'Холодний',
@@ -656,31 +768,29 @@ def index():
                             backgroundColor:'rgba(0, 122, 255, 0.1)',
                             tension:0.4,
                             fill:false,
-                            borderWidth: 3,
-                            pointBackgroundColor: '#007aff',
-                            pointBorderColor: '#ffffff',
-                            pointBorderWidth: 2,
-                            pointRadius: 4
+                            pointRadius: 4,
+                            pointHoverRadius: 6,
+                            borderWidth: 3
                         },
                         {
                             label:'Гарячий (мин. тиждень)',
                             data:data.hourly_prev.hot,
                             borderColor:'rgba(255, 107, 53, 0.5)',
-                            borderDash:[8,4],
+                            borderDash:[6,4],
                             tension:0.4,
                             fill:false,
-                            borderWidth: 2,
-                            pointRadius: 0
+                            pointRadius: 2,
+                            borderWidth: 2
                         },
                         {
                             label:'Холодний (мин. тиждень)',
                             data:data.hourly_prev.cold,
                             borderColor:'rgba(0, 122, 255, 0.5)',
-                            borderDash:[8,4],
+                            borderDash:[6,4],
                             tension:0.4,
                             fill:false,
-                            borderWidth: 2,
-                            pointRadius: 0
+                            pointRadius: 2,
+                            borderWidth: 2
                         }
                     ]
                 },
@@ -690,31 +800,65 @@ def index():
                     plugins:{
                         legend:{
                             labels:{
-                                color:'#98989d',
-                                font: {family: 'Inter', size: 12},
+                                color:'#ffffff',
+                                font: {
+                                    family: 'Inter',
+                                    size: 12,
+                                    weight: '500'
+                                },
                                 usePointStyle: true,
                                 padding: 20
                             }
                         },
-                        datalabels:{display:false}
+                        datalabels:{display:false},
+                        tooltip: {
+                            backgroundColor: 'rgba(42, 42, 42, 0.95)',
+                            titleColor: '#ffffff',
+                            bodyColor: '#ffffff',
+                            borderColor: 'rgba(255, 255, 255, 0.1)',
+                            borderWidth: 1
+                        }
                     },
                     scales:{
                         x:{
-                            ticks:{color:'#98989d', font: {family: 'Inter'}},
-                            grid:{color:'rgba(84, 84, 88, 0.3)'},
-                            border:{color:'rgba(84, 84, 88, 0.3)'}
+                            ticks:{
+                                color:'#a0a0a0',
+                                font: {
+                                    family: 'Inter',
+                                    size: 11
+                                }
+                            },
+                            title:{
+                                display:true,
+                                text:'Час',
+                                color: '#ffffff',
+                                font: {
+                                    family: 'Inter',
+                                    size: 12,
+                                    weight: '500'
+                                }
+                            },
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.1)'
+                            }
                         },
                         y:{
-                            ticks:{color:'#98989d', font: {family: 'Inter'}},
-                            grid:{color:'rgba(84, 84, 88, 0.3)'},
-                            border:{color:'rgba(84, 84, 88, 0.3)'},
-                            beginAtZero:true
+                            ticks:{
+                                color:'#a0a0a0',
+                                font: {
+                                    family: 'Inter',
+                                    size: 11
+                                }
+                            },
+                            beginAtZero:true,
+                            grid: {
+                                color: 'rgba(255, 255, 255, 0.1)'
+                            }
                         }
                     },
-                    elements: {
-                        point: {
-                            hoverRadius: 6
-                        }
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
                     }
                 }
             });
@@ -725,9 +869,12 @@ def index():
             const w = data.weather||{};
             let whtml = "";
             if(w.icon){ 
-                whtml += `<img src="https://openweathermap.org/img/wn/${w.icon}@2x.png" style="width: 32px; height: 32px;">`;
+                whtml += `<img src="https://openweathermap.org/img/wn/${w.icon}@2x.png" alt="weather">`;
             }
-            whtml += `<div>${w.temp||'—'}<br>${w.desc||'—'}</div>`;
+            whtml += `<span>${w.temp||'—'}</span>`;
+            if(w.desc && w.desc !== 'Н/Д') {
+                whtml += `<div style="font-size: 12px; margin-top: 4px; opacity: 0.7;">${w.desc}</div>`;
+            }
             document.getElementById('weather').innerHTML = whtml;
 
             // Столы
@@ -737,6 +884,12 @@ def index():
 
         refresh(); 
         setInterval(refresh, 60000);
+
+        // Update clock every second
+        setInterval(() => {
+            const now = new Date();
+            document.getElementById('clock').innerText = now.toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'});
+        }, 1000);
         </script>
     </body>
     </html>
