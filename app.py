@@ -231,6 +231,7 @@ def index():
     <head>
         <meta charset="utf-8" />
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+        <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
         <style>
             :root {
                 --bg:#0f0f0f; --panel:#151515; --fg:#eee;
@@ -291,13 +292,14 @@ def index():
             fill('hot_tbl', data.hot||{}, data.hot_prev||{});
             fill('cold_tbl', data.cold||{}, data.cold_prev||{});
 
-            // Круговая диаграмма
+            // Круговая диаграмма с подписями внутри
+            Chart.register(ChartDataLabels);
             const ctx2 = document.getElementById('pie').getContext('2d');
             if(pie) pie.destroy();
             pie = new Chart(ctx2,{
                 type:'pie',
                 data:{
-                    labels:['Гарячий','Холодний','Бар'],
+                    labels:['Гарячий цех','Холодний цех','Бар'],
                     datasets:[{
                         data:[data.share.hot,data.share.cold,data.share.bar],
                         backgroundColor:['#ff8800','#33b5ff','#9b59b6']
@@ -307,7 +309,14 @@ def index():
                     plugins:{
                         legend:{display:false},
                         tooltip:{enabled:false},
-                        datalabels:{display:true}
+                        datalabels:{
+                            color:'#fff',
+                            font:{weight:'bold', size:14},
+                            formatter:function(value, context){
+                                const label = context.chart.data.labels[context.dataIndex];
+                                return label + '\\n' + value + '%';
+                            }
+                        }
                     }
                 }
             });
