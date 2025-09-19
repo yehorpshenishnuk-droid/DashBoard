@@ -21,7 +21,7 @@ BAR_CATEGORIES  = {9,14,27,28,34,41,42,47,22,24,25,26,39,30}
 # Кэш
 PRODUCT_CACHE = {}
 PRODUCT_CACHE_TS = 0
-CACHE = {"hot": {}, "cold": {}, "hot_prev": {}, "cold_prev": {}, "hourly": {}, "hourly_prev": {}, "share": {}}
+CACHE = {"hot": {}, "cold": {}, "hot_prev": {}, "cold_prev": {}, "hourly": {}, "hourly_prev": {}, "share": {}, "tables": []}
 CACHE_TS = 0
 
 # ===== Helpers =====
@@ -194,6 +194,31 @@ def fetch_weather():
         print("ERROR weather:", e, file=sys.stderr, flush=True)
         return {"temp": "Н/Д", "desc": "Н/Д", "icon": ""}
 
+# ===== СТАТУС СТОЛОВ =====
+def fetch_tables_with_waiters():
+    target_date = date.today().strftime("%Y%m%d")
+    url = (
+        f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getTransactions"
+        f"?token={POSTER_TOKEN}&dateFrom={target_date}&dateTo={target_date}"
+    )
+    try:
+        resp = _get(url)
+        rows = resp.json().get("response", [])
+    except Exception as e:
+        print("ERROR tables_with_waiters:", e, file=sys.stderr, flush=True)
+        return []
+
+    tables = []
+    for trx in rows:
+        try:
+            tid = trx.get("table_id")
+            tname = trx.get("table_name", f"Стол {tid}")
+            waiter = trx.get("name", "—")  # имя официанта
+            tables.append({"id": tid, "name": tname, "waiter": waiter})
+        except Exception:
+            continue
+    return tables
+
 # ===== API =====
 @app.route("/api/sales")
 def api_sales():
@@ -218,7 +243,8 @@ def api_sales():
             "hot": sums_today["hot"], "cold": sums_today["cold"],
             "hot_prev": sums_prev["hot"], "cold_prev": sums_prev["cold"],
             "hourly": hourly, "hourly_prev": prev,
-            "share": share, "weather": fetch_weather()
+            "share": share, "weather": fetch_weather(),
+            "tables": fetch_tables_with_waiters()
         })
         CACHE_TS = time.time()
     return jsonify(CACHE)
@@ -260,6 +286,7 @@ def index():
                     <div id="weather" style="margin-top:10px;font-size:18px"></div>
                 </div>
                 <div class="card chart"><h2>📈 Замовлення по годинах (накопич.)</h2><canvas id="chart"></canvas></div>
+                <div class="card tables"><h2>🍽️ Столи</h2><table id="tables_tbl"></table></div>
             </div>
         </div>
         <div class="logo">GRECO</div>
@@ -292,7 +319,18 @@ def index():
             fill('hot_tbl', data.hot||{}, data.hot_prev||{});
             fill('cold_tbl', data.cold||{}, data.cold_prev||{});
 
-            // Круговая диаграмма с подписями внутри
+            // Таблица столов
+            function fillTables(tables){
+                const el = document.getElementById('tables_tbl');
+                let html = "<tr><th>ID</th><th>Стол</th><th>Офіціант</th></tr>";
+                tables.forEach(t => {
+                    html += `<tr><td>${t.id}</td><td>${t.name}</td><td>${t.waiter}</td></tr>`;
+                });
+                el.innerHTML = html;
+            }
+            fillTables(data.tables || []);
+
+            // Круговая диаграмма
             Chart.register(ChartDataLabels);
             const ctx2 = document.getElementById('pie').getContext('2d');
             if(pie) pie.destroy();
@@ -321,7 +359,7 @@ def index():
                 }
             });
 
-            // Линейная диаграмма (без цифр на линиях)
+            // Линейная диаграмма
             let today_hot = cutToNow(data.hourly.labels, data.hourly.hot);
             let today_cold = cutToNow(data.hourly.labels, data.hourly.cold);
 
@@ -342,7 +380,7 @@ def index():
                     responsive:true,
                     plugins:{
                         legend:{labels:{color:'#ddd'}},
-                        datalabels:{display:false} // отключаем цифры на линиях
+                        datalabels:{display:false}
                     },
                     scales:{
                         x:{ticks:{color:'#bbb'},title:{display:true,text:'Час'}},
