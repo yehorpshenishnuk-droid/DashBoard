@@ -10,6 +10,7 @@ app = Flask(__name__)
 # ==== Конфиг ====
 ACCOUNT_NAME = "poka-net3"
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
+CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # опционален (бронирования)
 WEATHER_KEY = os.getenv("WEATHER_KEY", "")         # API ключ OpenWeather
 
 # Категории POS ID
@@ -17,23 +18,26 @@ HOT_CATEGORIES  = {4, 13, 15, 46, 33}
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 BAR_CATEGORIES  = {9,14,27,28,34,41,42,47,22,24,25,26,39,30}
 
-# ====== Столы ======
-ALL_TABLES = {
-    1:"Стол 1", 2:"Стол 2", 3:"Стол 3", 4:"Стол 4", 5:"Стол 5", 6:"Стол 6", 8:"Стол 8",
-    7:"Стол 7", 10:"Стол 10", 11:"Стол 11", 12:"Стол 12", 13:"Стол 13"
+# Столы
+TABLES = {
+    "Зал": [1, 2, 3, 4, 5, 6, 8],
+    "Тераса": [7, 10, 11, 12, 13]
 }
-TERRACE_IDS = {7, 10, 11, 12, 13}
 
 # Кэш
 PRODUCT_CACHE = {}
 PRODUCT_CACHE_TS = 0
-CACHE = {}
+CACHE = {"hot": {}, "cold": {}, "hot_prev": {}, "cold_prev": {}, "hourly": {}, "hourly_prev": {}, "share": {}}
 CACHE_TS = 0
+EMPLOYEES = {}
+EMPLOYEES_TS = 0
+TABLES_CACHE = []
+TABLES_TS = 0
 
 # ===== Helpers =====
 def _get(url, **kwargs):
     r = requests.get(url, timeout=kwargs.pop("timeout", 25))
-    log_snippet = r.text[:200].replace("\n", " ")
+    log_snippet = r.text[:500].replace("\n", " ")
     print(f"DEBUG GET {url.split('?')[0]} -> {r.status_code} : {log_snippet}", file=sys.stderr, flush=True)
     r.raise_for_status()
     return r
@@ -78,7 +82,24 @@ def load_products():
 
     PRODUCT_CACHE = mapping
     PRODUCT_CACHE_TS = time.time()
+    print(f"DEBUG products cached: {len(PRODUCT_CACHE)} items", file=sys.stderr, flush=True)
     return PRODUCT_CACHE
+
+# ===== Сотрудники =====
+def load_employees():
+    global EMPLOYEES, EMPLOYEES_TS
+    if EMPLOYEES and time.time() - EMPLOYEES_TS < 3600:
+        return EMPLOYEES
+    try:
+        url = f"https://{ACCOUNT_NAME}.joinposter.com/api/access.getEmployees?token={POSTER_TOKEN}"
+        resp = _get(url)
+        data = resp.json().get("response", [])
+        EMPLOYEES = {int(u["user_id"]): u["name"] for u in data}
+        EMPLOYEES_TS = time.time()
+    except Exception as e:
+        print("ERROR employees:", e, file=sys.stderr, flush=True)
+        EMPLOYEES = {}
+    return EMPLOYEES
 
 # ===== Сводные продажи =====
 def fetch_category_sales(day_offset=0):
@@ -110,11 +131,10 @@ def fetch_category_sales(day_offset=0):
         elif cid in BAR_CATEGORIES:
             bar[name] = bar.get(name, 0) + qty
 
-    return {
-        "hot": dict(sorted(hot.items())),
-        "cold": dict(sorted(cold.items())),
-        "bar": dict(sorted(bar.items()))
-    }
+    hot = dict(sorted(hot.items(), key=lambda x: x[0]))
+    cold = dict(sorted(cold.items(), key=lambda x: x[0]))
+    bar = dict(sorted(bar.items(), key=lambda x: x[0]))
+    return {"hot": hot, "cold": cold, "bar": bar}
 
 # ===== Почасовая диаграмма =====
 def fetch_transactions_hourly(day_offset=0):
@@ -200,34 +220,7 @@ def fetch_weather():
         print("ERROR weather:", e, file=sys.stderr, flush=True)
         return {"temp": "Н/Д", "desc": "Н/Д", "icon": ""}
 
-# ===== API Poster: открытые чеки =====
-def fetch_open_orders():
-    url = f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getTransactions"
-    params = {
-        "token": POSTER_TOKEN,
-        "dateFrom": date.today().strftime("%Y%m%d"),
-        "dateTo": date.today().strftime("%Y%m%d")
-    }
-    try:
-        resp = requests.get(url, params=params, timeout=20)
-        rows = resp.json().get("response", [])
-    except Exception as e:
-        print("ERROR open_orders:", e, file=sys.stderr, flush=True)
-        return {}
-
-    busy = {}
-    for row in rows:
-        try:
-            if row.get("status") == "1":  # открытый чек
-                tid = int(row.get("table_id", 0))
-                waiter = row.get("name", "").strip()
-                if tid:
-                    busy[tid] = waiter
-        except Exception:
-            continue
-    return busy
-
-# ===== API эндпоинты =====
+# ===== API =====
 @app.route("/api/sales")
 def api_sales():
     global CACHE, CACHE_TS
@@ -258,22 +251,41 @@ def api_sales():
 
 @app.route("/api/tables")
 def api_tables():
-    busy = fetch_open_orders()
+    global TABLES_CACHE, TABLES_TS
+    if time.time() - TABLES_TS < 60 and TABLES_CACHE:
+        return jsonify(TABLES_CACHE)
 
-    hall, terrace = [], []
-    for tid, name in ALL_TABLES.items():
-        table_info = {
-            "id": tid,
-            "name": name,
-            "status": "busy" if tid in busy else "free",
-            "waiter": busy.get(tid, "")
-        }
-        if tid in TERRACE_IDS:
-            terrace.append(table_info)
-        else:
-            hall.append(table_info)
+    employees = load_employees()
+    result = []
 
-    return jsonify({"hall": hall, "terrace": terrace})
+    try:
+        url = f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getTransactions?token={POSTER_TOKEN}&status=open"
+        resp = _get(url)
+        trxs = resp.json().get("response", [])
+    except Exception as e:
+        print("ERROR tables:", e, file=sys.stderr, flush=True)
+        trxs = []
+
+    busy = {}
+    for trx in trxs:
+        try:
+            tid = int(trx.get("spot_id", 0))
+            uid = int(trx.get("user_id", 0))
+            waiter = employees.get(uid, "—")
+            busy[tid] = waiter
+        except Exception:
+            continue
+
+    for zone, tables in TABLES.items():
+        for t in tables:
+            if t in busy:
+                result.append({"id": t, "zone": zone, "status": "busy", "waiter": busy[t]})
+            else:
+                result.append({"id": t, "zone": zone, "status": "free", "waiter": ""})
+
+    TABLES_CACHE = result
+    TABLES_TS = time.time()
+    return jsonify(result)
 
 # ===== UI =====
 @app.route("/")
@@ -288,29 +300,27 @@ def index():
             :root {
                 --bg:#0f0f0f; --panel:#151515; --fg:#eee;
                 --hot:#ff8800; --cold:#33b5ff; --bar:#9b59b6;
-                --free:#444; --busy:#3498db;
             }
             body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif}
             .wrap{padding:10px;max-width:1800px;margin:0 auto}
             .row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:10px}
-            .row.bottom{grid-template-columns:2fr 1fr;}
             .card{background:var(--panel);border-radius:12px;padding:10px 14px;}
-            .card.chart{height:420px}
+            .card.chart{grid-column:1/3;height:420px}
+            .card.tables{grid-column:3/5;height:420px}
             table{width:100%;border-collapse:collapse;font-size:16px}
             th,td{padding:3px 6px;text-align:right}
             th:first-child,td:first-child{text-align:left}
-            .tables{display:grid;grid-template-columns:repeat(6,1fr);gap:10px;margin-bottom:15px}
-            .table{border-radius:8px;padding:16px;text-align:center;font-weight:bold}
-            .table.free{background:var(--free);color:#ccc;}
-            .table.busy{background:var(--busy);color:#fff;}
-            .table small{display:block;font-weight:normal;font-size:14px;margin-top:6px}
-            h2{margin:5px 0 10px;font-size:20px}
-            h3{margin:10px 0 5px;font-size:18px;color:#bbb}
+            .logo{position:fixed;right:18px;bottom:12px;font-weight:800}
+            canvas{max-width:100%}
+            #tables_grid{display:grid;grid-template-columns:repeat(auto-fill,minmax(120px,1fr));gap:8px;margin-top:10px}
+            .table{border-radius:8px;padding:10px;text-align:center;font-size:14px;font-weight:600}
+            .table.free{background:#555;color:#eee}
+            .table.busy{background:#4da6ff;color:#fff}
+            .zone-title{font-weight:bold;margin-top:8px;margin-bottom:4px}
         </style>
     </head>
     <body>
         <div class="wrap">
-            <!-- Верхний ряд -->
             <div class="row">
                 <div class="card hot"><h2>🔥 Гарячий цех</h2><table id="hot_tbl"></table></div>
                 <div class="card cold"><h2>❄️ Холодний цех</h2><table id="cold_tbl"></table></div>
@@ -319,17 +329,12 @@ def index():
                     <div id="clock" style="font-size:32px;margin-top:10px"></div>
                     <div id="weather" style="margin-top:10px;font-size:18px"></div>
                 </div>
-            </div>
-
-            <!-- Нижний ряд -->
-            <div class="row bottom">
                 <div class="card chart"><h2>📈 Замовлення по годинах (накопич.)</h2><canvas id="chart"></canvas></div>
-                <div class="card hall">
-                    <h2>🪑 Зал</h2>
-                    <h3>Основний зал</h3>
-                    <div id="hall_grid"></div>
-                    <h3>Літня тераса</h3>
-                    <div id="terrace_grid"></div>
+                <div class="card tables"><h2>🍽️ Столи</h2>
+                    <div class="zone-title">Зал</div>
+                    <div id="tables_hall" class="tables_grid"></div>
+                    <div class="zone-title">Тераса</div>
+                    <div id="tables_terrace" class="tables_grid"></div>
                 </div>
             </div>
         </div>
@@ -350,7 +355,7 @@ def index():
             const r = await fetch('/api/sales');
             const data = await r.json();
 
-            // Таблицы цехов
+            // Таблицы
             function fill(id, today, prev){
                 const el = document.getElementById(id);
                 let html = "<tr><th>Категорія</th><th>Сьогодні</th><th>Мин. тиждень</th></tr>";
@@ -404,23 +409,4 @@ def index():
                     labels:data.hourly.labels,
                     datasets:[
                         {label:'Гарячий',data:today_hot,borderColor:'#ff8800',backgroundColor:'#ff8800',tension:0.25,fill:false},
-                        {label:'Холодний',data:today_cold,borderColor:'#33b5ff',backgroundColor:'#33b5ff',tension:0.25,fill:false},
-                        {label:'Гарячий (мин. тижд.)',data:data.hourly_prev.hot,borderColor:'#ff8800',borderDash:[6,4],tension:0.25,fill:false},
-                        {label:'Холодний (мин. тижд.)',data:data.hourly_prev.cold,borderColor:'#33b5ff',borderDash:[6,4],tension:0.25,fill:false}
-                    ]
-                },
-                options:{
-                    responsive:true,
-                    plugins:{legend:{labels:{color:'#ddd'}},tooltip:{enabled:true}},
-                    scales:{
-                        x:{ticks:{color:'#bbb'},title:{display:true,text:'Час'}},
-                        y:{ticks:{color:'#bbb'},beginAtZero:true}
-                    }
-                }
-            });
-
-            // Часы и погода
-            const now = new Date();
-            document.getElementById('clock').innerText = now.toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'});
-            const w = data.weather||{};
-            let whtml =
+                        {label:'Холодний',data:today_cold,b
