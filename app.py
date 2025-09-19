@@ -18,14 +18,13 @@ HOT_CATEGORIES  = {4, 13, 15, 46, 33}
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 BAR_CATEGORIES  = {9,14,27,28,34,41,42,47,22,24,25,26,39,30}
 
-# Схема столов
-HALL_TABLES = [1,2,3,4,5,6,8]
-TERRACE_TABLES = [7,10,11,12,13]
-
 # Кэш
 PRODUCT_CACHE = {}
 PRODUCT_CACHE_TS = 0
-CACHE = {"hot": {}, "cold": {}, "hot_prev": {}, "cold_prev": {}, "hourly": {}, "hourly_prev": {}, "share": {}, "tables": {}}
+CACHE = {
+    "hot": {}, "cold": {}, "hot_prev": {}, "cold_prev": {},
+    "hourly": {}, "hourly_prev": {}, "share": {}, "tables": {}
+}
 CACHE_TS = 0
 
 # ===== Helpers =====
@@ -198,7 +197,10 @@ def fetch_weather():
         print("ERROR weather:", e, file=sys.stderr, flush=True)
         return {"temp": "Н/Д", "desc": "Н/Д", "icon": ""}
 
-# ===== Столы и официанты =====
+# ===== Столы =====
+HALL_TABLES = [1,2,3,4,5,6,8]
+TERRACE_TABLES = [7,10,11,12,13]
+
 def fetch_tables_with_waiters():
     target_date = date.today().strftime("%Y%m%d")
     url = (
@@ -215,30 +217,32 @@ def fetch_tables_with_waiters():
     active = {}
     for trx in rows:
         try:
-            tid = int(trx.get("table_id", 0))
+            status = int(trx.get("status", 0))
+            if status == 2:   # закрытые пропускаем
+                continue
+            tname = int(trx.get("table_name", 0))
             waiter = trx.get("name", "—")
-            active[tid] = waiter
+            active[tname] = waiter
         except Exception:
             continue
 
-    hall = []
-    terrace = []
-    for tid in HALL_TABLES:
-        hall.append({
-            "id": tid,
-            "name": f"Стол {tid}",
-            "waiter": active.get(tid, ""),
-            "occupied": tid in active
-        })
-    for tid in TERRACE_TABLES:
-        terrace.append({
-            "id": tid,
-            "name": f"Стол {tid}",
-            "waiter": active.get(tid, ""),
-            "occupied": tid in active
-        })
+    # Debug log
+    print("DEBUG OPEN TABLES:", active, file=sys.stderr, flush=True)
 
-    return {"hall": hall, "terrace": terrace}
+    def build(zone_numbers):
+        out = []
+        for tnum in zone_numbers:
+            occupied = tnum in active
+            waiter = active.get(tnum, "—")
+            out.append({
+                "id": tnum,
+                "name": f"Стол {tnum}",
+                "waiter": waiter,
+                "occupied": occupied
+            })
+        return out
+
+    return {"hall": build(HALL_TABLES), "terrace": build(TERRACE_TABLES)}
 
 # ===== API =====
 @app.route("/api/sales")
@@ -294,30 +298,10 @@ def index():
             th:first-child,td:first-child{text-align:left}
             .logo{position:fixed;right:18px;bottom:12px;font-weight:800}
             canvas{max-width:100%}
-            .tables-grid {
-                display: grid;
-                grid-template-columns: repeat(auto-fill, minmax(100px, 1fr));
-                gap: 10px;
-                margin-top: 10px;
-            }
-            .table-card {
-                border-radius: 10px;
-                padding: 12px;
-                text-align: center;
-                font-size: 16px;
-                font-weight: bold;
-                background: #555;
-                color: #fff;
-            }
-            .table-card.occupied {
-                background: #4fc3f7;
-                color: #000;
-            }
-            .table-card .waiter {
-                font-size: 14px;
-                font-weight: normal;
-                margin-top: 4px;
-            }
+            .tables{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
+            .table-tile{border-radius:10px;padding:18px;font-weight:bold;text-align:center;font-size:18px}
+            .occupied{background:#33b5ff;color:#000;}
+            .free{background:#555;color:#fff;}
         </style>
     </head>
     <body>
@@ -331,12 +315,8 @@ def index():
                     <div id="weather" style="margin-top:10px;font-size:18px"></div>
                 </div>
                 <div class="card chart"><h2>📈 Замовлення по годинах (накопич.)</h2><canvas id="chart"></canvas></div>
-                <div class="card tables">
-                    <h2>🍽️ Зал</h2>
-                    <div id="tables_hall" class="tables-grid"></div>
-                    <h2 style="margin-top:15px">🌿 Літня тераса</h2>
-                    <div id="tables_terrace" class="tables-grid"></div>
-                </div>
+                <div class="card tables"><h2>🍴 Зал</h2><div id="hall" class="tables"></div></div>
+                <div class="card tables"><h2>🌿 Літня тераса</h2><div id="terrace" class="tables"></div></div>
             </div>
         </div>
         <div class="logo">GRECO</div>
@@ -352,11 +332,22 @@ def index():
             return arr.slice(0, cutIndex);
         }
 
+        function renderTables(zoneId, data){
+            const el = document.getElementById(zoneId);
+            el.innerHTML = "";
+            data.forEach(t=>{
+                const div = document.createElement("div");
+                div.className = "table-tile " + (t.occupied ? "occupied":"free");
+                div.innerHTML = `<div>${t.name}</div><div>${t.waiter}</div>`;
+                el.appendChild(div);
+            });
+        }
+
         async function refresh(){
             const r = await fetch('/api/sales');
             const data = await r.json();
 
-            // Таблицы продаж
+            // Таблицы
             function fill(id, today, prev){
                 const el = document.getElementById(id);
                 let html = "<tr><th>Категорія</th><th>Сьогодні</th><th>Мин. тиждень</th></tr>";
@@ -369,25 +360,7 @@ def index():
             fill('hot_tbl', data.hot||{}, data.hot_prev||{});
             fill('cold_tbl', data.cold||{}, data.cold_prev||{});
 
-            // Столы
-            function renderTables(containerId, tables){
-                const el = document.getElementById(containerId);
-                let html = "";
-                tables.forEach(t => {
-                    const cls = t.occupied ? "table-card occupied" : "table-card";
-                    const waiter = t.waiter || "—";
-                    html += `
-                      <div class="${cls}">
-                        <div>${t.name}</div>
-                        <div class="waiter">${waiter}</div>
-                      </div>`;
-                });
-                el.innerHTML = html;
-            }
-            renderTables("tables_hall", data.tables?.hall || []);
-            renderTables("tables_terrace", data.tables?.terrace || []);
-
-            // Круговая диаграмма
+            // Диаграмма пай
             Chart.register(ChartDataLabels);
             const ctx2 = document.getElementById('pie').getContext('2d');
             if(pie) pie.destroy();
@@ -416,7 +389,7 @@ def index():
                 }
             });
 
-            // Линейная диаграмма
+            // Линия
             let today_hot = cutToNow(data.hourly.labels, data.hourly.hot);
             let today_cold = cutToNow(data.hourly.labels, data.hourly.cold);
 
@@ -454,6 +427,10 @@ def index():
             if(w.icon){ whtml += `<img src="https://openweathermap.org/img/wn/${w.icon}@2x.png" style="vertical-align:middle">`; }
             whtml += ` ${w.temp||'—'}<br>${w.desc||'—'}`;
             document.getElementById('weather').innerHTML = whtml;
+
+            // Столы
+            renderTables('hall', data.tables.hall||[]);
+            renderTables('terrace', data.tables.terrace||[]);
         }
         refresh(); setInterval(refresh, 60000);
         </script>
