@@ -321,7 +321,7 @@ def index():
                 }
             });
 
-            // Линейная диаграмма
+            // Линейная диаграмма (без цифр на линиях)
             let today_hot = cutToNow(data.hourly.labels, data.hourly.hot);
             let today_cold = cutToNow(data.hourly.labels, data.hourly.cold);
 
@@ -340,7 +340,10 @@ def index():
                 },
                 options:{
                     responsive:true,
-                    plugins:{legend:{labels:{color:'#ddd'}}},
+                    plugins:{
+                        legend:{labels:{color:'#ddd'}},
+                        datalabels:{display:false} // отключаем цифры на линиях
+                    },
                     scales:{
                         x:{ticks:{color:'#bbb'},title:{display:true,text:'Час'}},
                         y:{ticks:{color:'#bbb'},beginAtZero:true}
