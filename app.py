@@ -400,45 +400,45 @@ def index():
                 position: relative;
             }
 
-            /* Блок времени и погоды - увеличен на 80% */
+            /* Блок времени и погоды - на всю площадь блока */
             .time-weather {
                 display: flex;
                 flex-direction: column;
                 align-items: center;
-                justify-content: space-between;
+                justify-content: center;
                 text-align: center;
                 flex: 1;
-                padding: 20px 0;
+                height: 100%;
+                gap: 20px;
             }
 
             .clock {
-                font-size: 36px;
+                font-size: 48px;
                 font-weight: 700;
                 color: var(--text-primary);
                 font-variant-numeric: tabular-nums;
-                margin-bottom: 16px;
             }
 
             .weather {
                 display: flex;
                 flex-direction: column;
                 align-items: center;
-                gap: 8px;
+                gap: 12px;
             }
 
             .weather img {
-                width: 56px;
-                height: 56px;
+                width: 72px;
+                height: 72px;
             }
 
             .temp {
-                font-size: 22px;
+                font-size: 28px;
                 font-weight: 600;
                 color: var(--text-primary);
             }
 
             .desc {
-                font-size: 14px;
+                font-size: 16px;
                 color: var(--text-secondary);
                 text-align: center;
             }
