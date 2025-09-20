@@ -322,7 +322,7 @@ def index():
             .dashboard {
                 display: grid;
                 grid-template-columns: 1fr 1fr 1fr 1fr;
-                grid-template-rows: minmax(0, 35vh) minmax(0, 60vh);
+                grid-template-rows: minmax(0, 38vh) minmax(0, 55vh);
                 gap: 12px;
                 height: 100vh;
                 max-height: 100vh;
@@ -363,12 +363,12 @@ def index():
             table {
                 width: 100%;
                 border-collapse: collapse;
-                font-size: 12px;
+                font-size: 15px;
                 margin-top: auto;
             }
 
             th, td {
-                padding: 4px 6px;
+                padding: 6px 8px;
                 text-align: right;
                 border-bottom: 1px solid var(--border-color);
             }
@@ -380,14 +380,15 @@ def index():
             th {
                 color: var(--text-secondary);
                 font-weight: 500;
-                font-size: 11px;
+                font-size: 13px;
                 text-transform: uppercase;
                 letter-spacing: 0.5px;
             }
 
             td {
                 color: var(--text-primary);
-                font-weight: 500;
+                font-weight: 600;
+                font-size: 15px;
             }
 
             /* Блок с распределением заказов */
@@ -410,33 +411,38 @@ def index():
             }
 
             .clock {
-                font-size: 28px;
+                font-size: 36px;
                 font-weight: 700;
                 color: var(--text-primary);
                 font-variant-numeric: tabular-nums;
+                flex: 0.8;
+                display: flex;
+                align-items: center;
+                justify-content: center;
             }
 
             .weather {
                 display: flex;
                 flex-direction: column;
                 align-items: center;
-                gap: 4px;
-                margin-top: 8px;
+                gap: 2px;
+                flex: 0.2;
+                margin-top: 4px;
             }
 
             .weather img {
-                width: 48px;
-                height: 48px;
+                width: 32px;
+                height: 32px;
             }
 
             .temp {
-                font-size: 18px;
+                font-size: 14px;
                 font-weight: 600;
                 color: var(--text-primary);
             }
 
             .desc {
-                font-size: 12px;
+                font-size: 10px;
                 color: var(--text-secondary);
                 text-align: center;
             }
@@ -486,24 +492,25 @@ def index():
 
             .tables-grid {
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
-                gap: 6px;
+                grid-template-columns: repeat(auto-fit, minmax(90px, 1fr));
+                gap: 8px;
                 height: calc(100% - 24px);
             }
 
             .table-tile {
                 border-radius: 12px;
-                padding: 8px;
-                font-weight: 600;
+                padding: 10px;
+                font-weight: 700;
                 text-align: center;
-                font-size: 11px;
+                font-size: 12px;
                 display: flex;
                 flex-direction: column;
                 justify-content: center;
-                gap: 2px;
+                gap: 4px;
                 transition: all 0.2s ease;
                 border: 1px solid var(--border-color);
-                min-height: 60px;
+                min-height: 70px;
+                max-height: 70px;
             }
 
             .table-tile.occupied {
@@ -520,13 +527,14 @@ def index():
             }
 
             .table-number {
-                font-weight: 700;
-                font-size: 12px;
+                font-weight: 800;
+                font-size: 13px;
             }
 
             .table-waiter {
-                font-size: 10px;
-                opacity: 0.8;
+                font-size: 11px;
+                font-weight: 700;
+                opacity: 0.9;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
@@ -536,15 +544,17 @@ def index():
             .logo {
                 position: fixed;
                 right: 20px;
-                bottom: 16px;
-                font-weight: 800;
-                font-size: 18px;
-                color: var(--text-secondary);
+                bottom: 12px;
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, sans-serif;
+                font-weight: 500;
+                font-size: 16px;
+                color: #ffffff;
                 z-index: 1000;
                 background: var(--bg-secondary);
-                padding: 8px 12px;
+                padding: 6px 10px;
                 border-radius: 8px;
                 border: 1px solid var(--border-color);
+                letter-spacing: 0.5px;
             }
 
             /* Canvas styling */
@@ -576,7 +586,7 @@ def index():
             /* Responsive adjustments */
             @media (max-height: 900px) {
                 .dashboard {
-                    grid-template-rows: minmax(0, 32vh) minmax(0, 63vh);
+                    grid-template-rows: minmax(0, 36vh) minmax(0, 57vh);
                 }
                 
                 .card {
@@ -589,7 +599,15 @@ def index():
                 }
                 
                 .clock {
-                    font-size: 24px;
+                    font-size: 32px;
+                }
+
+                table {
+                    font-size: 13px;
+                }
+
+                td {
+                    font-size: 13px;
                 }
             }
         </style>
@@ -653,7 +671,7 @@ def index():
             </div>
         </div>
 
-        <div class="logo">GRECO</div>
+        <div class="logo">GRECO Tech ™</div>
 
         <script>
         let chart, pie;
@@ -701,14 +719,14 @@ def index():
             const ctx2 = document.getElementById('pie').getContext('2d');
             if(pie) pie.destroy();
             pie = new Chart(ctx2,{
-                type:'doughnut',
+                type:'pie',
                 data:{
-                    labels:['Гарячий цех','Холодний цех','Бар'],
+                    labels:['Гор. цех','Хол. цех','Бар'],
                     datasets:[{
                         data:[data.share.hot,data.share.cold,data.share.bar],
                         backgroundColor:['#ff9500','#007aff','#af52de'],
-                        borderWidth: 0,
-                        cutout: '60%'
+                        borderWidth: 2,
+                        borderColor: '#1c1c1e'
                     }]
                 },
                 options:{
@@ -719,9 +737,10 @@ def index():
                         tooltip:{enabled:false},
                         datalabels:{
                             color:'#fff',
-                            font:{weight:'bold', size:11},
+                            font:{weight:'bold', size:12},
                             formatter:function(value, context){
-                                return value + '%';
+                                const label = context.chart.data.labels[context.dataIndex];
+                                return label + '\n' + value + '%';
                             }
                         }
                     }
