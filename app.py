@@ -316,23 +316,23 @@ def index():
                 color: var(--text-primary);
                 overflow: hidden;
                 height: 100vh;
-                padding: 10px;
+                padding: 12px;
             }
 
             .dashboard {
                 display: grid;
                 grid-template-columns: 1fr 1fr 1fr 1fr;
-                grid-template-rows: minmax(0, 40vh) minmax(0, 50vh);
-                gap: 10px;
-                height: calc(100vh - 40px);
-                max-height: calc(100vh - 40px);
+                grid-template-rows: minmax(0, 40vh) minmax(0, 55vh);
+                gap: 12px;
+                height: calc(100vh - 35px);
+                max-height: calc(100vh - 35px);
                 padding: 0;
             }
 
             .card {
                 background: var(--bg-secondary);
                 border-radius: 16px;
-                padding: 14px;
+                padding: 16px;
                 border: 1px solid var(--border-color);
                 box-shadow: var(--shadow);
                 overflow: hidden;
@@ -341,9 +341,9 @@ def index():
             }
 
             .card h2 {
-                font-size: 15px;
+                font-size: 17px;
                 font-weight: 600;
-                margin-bottom: 10px;
+                margin-bottom: 14px;
                 display: flex;
                 align-items: center;
                 gap: 8px;
@@ -359,11 +359,11 @@ def index():
                 min-height: 0;
             }
 
-            /* Таблицы в карточках */
+            /* Таблицы в карточках - увеличенный шрифт */
             table {
                 width: 100%;
                 border-collapse: collapse;
-                font-size: 14px;
+                font-size: 15px;
                 margin-top: auto;
             }
 
@@ -380,7 +380,7 @@ def index():
             th {
                 color: var(--text-secondary);
                 font-weight: 600;
-                font-size: 12px;
+                font-size: 13px;
                 text-transform: uppercase;
                 letter-spacing: 0.5px;
             }
@@ -388,10 +388,9 @@ def index():
             td {
                 color: var(--text-primary);
                 font-weight: 600;
-                font-size: 14px;
             }
 
-            /* Блок с распределением заказов */
+            /* Блок с распределением заказов - полноценный пирог */
             .pie-container {
                 flex: 1;
                 display: flex;
@@ -401,15 +400,15 @@ def index():
                 position: relative;
             }
 
-            /* Блок времени и погоды */
+            /* Блок времени и погоды - увеличен на 80% */
             .time-weather {
                 display: flex;
                 flex-direction: column;
                 align-items: center;
-                justify-content: center;
+                justify-content: space-between;
                 text-align: center;
                 flex: 1;
-                gap: 12px;
+                padding: 20px 0;
             }
 
             .clock {
@@ -417,13 +416,14 @@ def index():
                 font-weight: 700;
                 color: var(--text-primary);
                 font-variant-numeric: tabular-nums;
+                margin-bottom: 16px;
             }
 
             .weather {
                 display: flex;
                 flex-direction: column;
                 align-items: center;
-                gap: 6px;
+                gap: 8px;
             }
 
             .weather img {
@@ -432,13 +432,13 @@ def index():
             }
 
             .temp {
-                font-size: 20px;
+                font-size: 22px;
                 font-weight: 600;
                 color: var(--text-primary);
             }
 
             .desc {
-                font-size: 13px;
+                font-size: 14px;
                 color: var(--text-secondary);
                 text-align: center;
             }
@@ -467,7 +467,7 @@ def index():
                 flex: 1;
                 display: flex;
                 flex-direction: column;
-                gap: 10px;
+                gap: 12px;
                 min-height: 0;
             }
 
@@ -477,9 +477,9 @@ def index():
             }
 
             .tables-zone h3 {
-                font-size: 13px;
+                font-size: 14px;
                 font-weight: 600;
-                margin-bottom: 6px;
+                margin-bottom: 8px;
                 color: var(--text-secondary);
                 display: flex;
                 align-items: center;
@@ -489,22 +489,25 @@ def index():
             .tables-grid {
                 display: grid;
                 grid-template-columns: repeat(auto-fit, minmax(85px, 1fr));
-                gap: 6px;
-                height: calc(100% - 20px);
+                gap: 8px;
+                height: calc(100% - 24px);
             }
 
             .table-tile {
                 border-radius: 12px;
-                padding: 8px;
+                padding: 10px;
+                font-weight: 700;
                 text-align: center;
+                font-size: 12px;
                 display: flex;
                 flex-direction: column;
                 justify-content: center;
-                gap: 3px;
+                gap: 4px;
                 transition: all 0.2s ease;
                 border: 1px solid var(--border-color);
-                min-height: 65px;
-                max-height: 65px;
+                height: 75px;
+                width: 85px;
+                justify-self: center;
             }
 
             .table-tile.occupied {
@@ -522,24 +525,25 @@ def index():
 
             .table-number {
                 font-weight: 700;
-                font-size: 12px;
+                font-size: 13px;
+                margin-bottom: 2px;
             }
 
             .table-waiter {
-                font-size: 13px;
+                font-size: 11px;
                 font-weight: 700;
-                opacity: 1;
+                opacity: 0.9;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
-                line-height: 1.2;
+                max-width: 100%;
             }
 
-            /* Logo */
+            /* Logo - обновлен */
             .logo {
                 position: fixed;
                 right: 20px;
-                bottom: 10px;
+                bottom: 8px;
                 font-family: 'Inter', sans-serif;
                 font-weight: 800;
                 font-size: 16px;
@@ -557,67 +561,27 @@ def index():
                 max-height: 100% !important;
             }
 
-            /* Pie chart labels */
-            .pie-legend {
-                position: absolute;
-                top: 50%;
-                left: 50%;
-                transform: translate(-50%, -50%);
-                pointer-events: none;
-                text-align: center;
-            }
-
-            .pie-center-text {
-                font-size: 10px;
-                font-weight: 600;
-                color: var(--text-primary);
-                line-height: 1.2;
-            }
-
             /* Responsive adjustments */
             @media (max-height: 900px) {
                 .dashboard {
-                    grid-template-rows: minmax(0, 38vh) minmax(0, 52vh);
+                    grid-template-rows: minmax(0, 38vh) minmax(0, 57vh);
                 }
                 
                 .card {
-                    padding: 12px;
+                    padding: 14px;
                 }
                 
                 .card h2 {
-                    font-size: 14px;
-                    margin-bottom: 8px;
+                    font-size: 16px;
+                    margin-bottom: 12px;
                 }
                 
                 .clock {
                     font-size: 32px;
                 }
-
+                
                 table {
-                    font-size: 13px;
-                }
-
-                td {
-                    font-size: 13px;
-                }
-            }
-
-            @media (max-height: 800px) {
-                .dashboard {
-                    grid-template-rows: minmax(0, 36vh) minmax(0, 54vh);
-                }
-
-                .clock {
-                    font-size: 28px;
-                }
-
-                .weather img {
-                    width: 48px;
-                    height: 48px;
-                }
-
-                .temp {
-                    font-size: 18px;
+                    font-size: 14px;
                 }
             }
         </style>
@@ -642,7 +606,7 @@ def index():
             <div class="card share top-card">
                 <h2>📊 Розподіл замовлень</h2>
                 <div class="pie-container">
-                    <canvas id="pie" width="200" height="200"></canvas>
+                    <canvas id="pie" width="220" height="220"></canvas>
                 </div>
             </div>
 
@@ -660,7 +624,7 @@ def index():
 
             <!-- Нижний ряд -->
             <div class="card chart-card">
-                <h2>📈 Замовлення по годинам (накопич.)</h2>
+                <h2>📈 Замовлення по годинах (накопич.)</h2>
                 <div class="chart-container">
                     <canvas id="chart"></canvas>
                 </div>
@@ -714,7 +678,7 @@ def index():
 
             function fill(id, today, prev){
                 const el = document.getElementById(id);
-                let html = "<tr><th>Категорії</th><th>Сьогодні</th><th>Мин. тиждень</th></tr>";
+                let html = "<tr><th>Категорія</th><th>Сьогодні</th><th>Мин. тиждень</th></tr>";
                 const keys = new Set([...Object.keys(today), ...Object.keys(prev)]);
                 keys.forEach(k => {
                     html += `<tr><td>${k}</td><td>${today[k]||0}</td><td>${prev[k]||0}</td></tr>`;
@@ -724,19 +688,19 @@ def index():
             fill('hot_tbl', data.hot||{}, data.hot_prev||{});
             fill('cold_tbl', data.cold||{}, data.cold_prev||{});
 
-            // Pie chart
+            // Pie chart - полноценный пирог с подписями внутри
             Chart.register(ChartDataLabels);
             const ctx2 = document.getElementById('pie').getContext('2d');
             if(pie) pie.destroy();
             pie = new Chart(ctx2,{
                 type:'pie',
                 data:{
-                    labels:['Гарячий цех','Холодний цех','Бар'],
+                    labels:['Гар.цех','Хол.цех','Бар'],
                     datasets:[{
                         data:[data.share.hot,data.share.cold,data.share.bar],
                         backgroundColor:['#ff9500','#007aff','#af52de'],
                         borderWidth: 2,
-                        borderColor: '#1c1c1e'
+                        borderColor: '#000'
                     }]
                 },
                 options:{
@@ -744,25 +708,16 @@ def index():
                     maintainAspectRatio: false,
                     plugins:{
                         legend:{display:false},
-                        tooltip:{
-                            callbacks: {
-                                label: function(context) {
-                                    return context.label + ': ' + context.parsed + '%';
-                                }
-                            }
-                        },
+                        tooltip:{enabled:false},
                         datalabels:{
                             color:'#fff',
-                            font:{weight:'bold', size:12},
+                            font:{weight:'bold', size:13, family:'Inter'},
                             formatter:function(value, context){
                                 const label = context.chart.data.labels[context.dataIndex];
-                                return label + '\n' + value + '%';
+                                return label + '\\n' + value + '%';
                             },
                             textAlign: 'center'
                         }
-                    },
-                    layout: {
-                        padding: 10
                     }
                 }
             });
@@ -844,6 +799,11 @@ def index():
                         x:{
                             ticks:{color:'#8e8e93', font: { size: 10 }},
                             grid:{color:'rgba(142, 142, 147, 0.2)'},
+                            border:{color:'#38383a'}
+                        },
+                        y:{
+                            ticks:{color:'#8e8e93', font: { size: 10 }},
+                            grid:{color:'rgba(142, 142, 147, 0.2)'},
                             border:{color:'#38383a'},
                             beginAtZero:true
                         }
@@ -894,8 +854,3 @@ def index():
 if __name__ == "__main__":
     port = int(os.getenv("PORT", 5000))
     app.run(host="0.0.0.0", port=port)
-                        },
-                        y:{
-                            ticks:{color:'#8e8e93', font: { size: 10 }},
-                            grid:{color:'rgba(142, 142, 147, 0.2)'},
-                            border:{color:'#38
