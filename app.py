@@ -316,23 +316,23 @@ def index():
                 color: var(--text-primary);
                 overflow: hidden;
                 height: 100vh;
-                padding: 12px;
+                padding: 8px;
             }
 
             .dashboard {
                 display: grid;
                 grid-template-columns: 1fr 1fr 1fr 1fr;
-                grid-template-rows: minmax(0, 40vh) minmax(0, 55vh);
-                gap: 12px;
-                height: calc(100vh - 35px);
-                max-height: calc(100vh - 35px);
+                grid-template-rows: minmax(0, 35vh) minmax(0, 58vh);
+                gap: 8px;
+                height: calc(100vh - 25px);
+                max-height: calc(100vh - 25px);
                 padding: 0;
             }
 
             .card {
                 background: var(--bg-secondary);
-                border-radius: 16px;
-                padding: 16px;
+                border-radius: 12px;
+                padding: 10px;
                 border: 1px solid var(--border-color);
                 box-shadow: var(--shadow);
                 overflow: hidden;
@@ -341,12 +341,12 @@ def index():
             }
 
             .card h2 {
-                font-size: 17px;
+                font-size: 14px;
                 font-weight: 600;
-                margin-bottom: 14px;
+                margin-bottom: 8px;
                 display: flex;
                 align-items: center;
-                gap: 8px;
+                gap: 6px;
                 color: var(--text-primary);
             }
 
@@ -359,16 +359,16 @@ def index():
                 min-height: 0;
             }
 
-            /* Таблицы в карточках - увеличенный шрифт */
+            /* Таблицы в карточках - уменьшенный шрифт */
             table {
                 width: 100%;
                 border-collapse: collapse;
-                font-size: 15px;
+                font-size: 12px;
                 margin-top: auto;
             }
 
             th, td {
-                padding: 6px 8px;
+                padding: 4px 6px;
                 text-align: right;
                 border-bottom: 1px solid var(--border-color);
             }
@@ -380,7 +380,7 @@ def index():
             th {
                 color: var(--text-secondary);
                 font-weight: 600;
-                font-size: 13px;
+                font-size: 10px;
                 text-transform: uppercase;
                 letter-spacing: 0.5px;
             }
@@ -388,9 +388,10 @@ def index():
             td {
                 color: var(--text-primary);
                 font-weight: 600;
+                font-size: 11px;
             }
 
-            /* Блок с распределением заказов - полноценный пирог */
+            /* Блок с распределением заказов - компактный пирог */
             .pie-container {
                 flex: 1;
                 display: flex;
@@ -398,9 +399,10 @@ def index():
                 justify-content: center;
                 min-height: 0;
                 position: relative;
+                padding: 5px;
             }
 
-            /* Блок времени и погоды - на всю площадь блока */
+            /* Блок времени и погоды - МАКСИМАЛЬНО УВЕЛИЧЕН */
             .time-weather {
                 display: flex;
                 flex-direction: column;
@@ -408,39 +410,45 @@ def index():
                 justify-content: center;
                 text-align: center;
                 flex: 1;
+                padding: 5px;
                 height: 100%;
-                gap: 20px;
             }
 
             .clock {
-                font-size: 48px;
-                font-weight: 700;
+                font-size: 52px;
+                font-weight: 800;
                 color: var(--text-primary);
                 font-variant-numeric: tabular-nums;
+                margin-bottom: 10px;
+                line-height: 0.9;
             }
 
             .weather {
                 display: flex;
                 flex-direction: column;
                 align-items: center;
-                gap: 12px;
+                gap: 5px;
+                flex: 1;
             }
 
             .weather img {
-                width: 72px;
-                height: 72px;
+                width: 80px;
+                height: 80px;
+                margin-bottom: 5px;
             }
 
             .temp {
                 font-size: 28px;
-                font-weight: 600;
+                font-weight: 700;
                 color: var(--text-primary);
+                line-height: 1;
             }
 
             .desc {
-                font-size: 16px;
+                font-size: 13px;
                 color: var(--text-secondary);
                 text-align: center;
+                font-weight: 500;
             }
 
             /* График заказов */
@@ -456,7 +464,7 @@ def index():
                 position: relative;
             }
 
-            /* Столы */
+            /* Столы - МАКСИМАЛЬНО УВЕЛИЧЕНЫ */
             .tables-card {
                 grid-column: 3 / 5;
                 display: flex;
@@ -467,7 +475,7 @@ def index():
                 flex: 1;
                 display: flex;
                 flex-direction: column;
-                gap: 12px;
+                gap: 8px;
                 min-height: 0;
             }
 
@@ -477,36 +485,37 @@ def index():
             }
 
             .tables-zone h3 {
-                font-size: 14px;
+                font-size: 12px;
                 font-weight: 600;
-                margin-bottom: 8px;
+                margin-bottom: 6px;
                 color: var(--text-secondary);
                 display: flex;
                 align-items: center;
-                gap: 6px;
+                gap: 4px;
             }
 
             .tables-grid {
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(85px, 1fr));
-                gap: 8px;
-                height: calc(100% - 24px);
+                grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
+                gap: 6px;
+                height: calc(100% - 20px);
+                align-content: start;
             }
 
             .table-tile {
-                border-radius: 12px;
-                padding: 10px;
+                border-radius: 10px;
+                padding: 12px 8px;
                 font-weight: 700;
                 text-align: center;
-                font-size: 12px;
+                font-size: 13px;
                 display: flex;
                 flex-direction: column;
                 justify-content: center;
                 gap: 4px;
                 transition: all 0.2s ease;
                 border: 1px solid var(--border-color);
-                height: 75px;
-                width: 85px;
+                height: 85px;
+                width: 110px;
                 justify-self: center;
             }
 
@@ -525,33 +534,34 @@ def index():
 
             .table-number {
                 font-weight: 700;
-                font-size: 13px;
-                margin-bottom: 2px;
+                font-size: 15px;
+                margin-bottom: 3px;
             }
 
             .table-waiter {
-                font-size: 11px;
-                font-weight: 700;
-                opacity: 0.9;
+                font-size: 12px;
+                font-weight: 600;
+                opacity: 0.95;
                 overflow: hidden;
                 text-overflow: ellipsis;
                 white-space: nowrap;
                 max-width: 100%;
+                line-height: 1.2;
             }
 
-            /* Logo - обновлен */
+            /* Logo - компактный */
             .logo {
                 position: fixed;
-                right: 20px;
-                bottom: 8px;
+                right: 15px;
+                bottom: 5px;
                 font-family: 'Inter', sans-serif;
                 font-weight: 800;
-                font-size: 16px;
+                font-size: 14px;
                 color: #ffffff;
                 z-index: 1000;
                 background: var(--bg-secondary);
-                padding: 6px 10px;
-                border-radius: 8px;
+                padding: 4px 8px;
+                border-radius: 6px;
                 border: 1px solid var(--border-color);
             }
 
@@ -561,27 +571,63 @@ def index():
                 max-height: 100% !important;
             }
 
-            /* Responsive adjustments */
-            @media (max-height: 900px) {
+            /* Responsive adjustments для очень маленьких экранов */
+            @media (max-height: 800px) {
+                body {
+                    padding: 6px;
+                }
+                
                 .dashboard {
-                    grid-template-rows: minmax(0, 38vh) minmax(0, 57vh);
+                    gap: 6px;
+                    grid-template-rows: minmax(0, 33vh) minmax(0, 60vh);
                 }
                 
                 .card {
-                    padding: 14px;
+                    padding: 8px;
                 }
                 
                 .card h2 {
-                    font-size: 16px;
-                    margin-bottom: 12px;
+                    font-size: 12px;
+                    margin-bottom: 6px;
                 }
                 
                 .clock {
-                    font-size: 32px;
+                    font-size: 44px;
                 }
                 
-                table {
-                    font-size: 14px;
+                .weather img {
+                    width: 65px;
+                    height: 65px;
+                }
+                
+                .temp {
+                    font-size: 24px;
+                }
+                
+                .table-tile {
+                    height: 75px;
+                    width: 100px;
+                    padding: 10px 6px;
+                }
+                
+                .table-number {
+                    font-size: 13px;
+                }
+                
+                .table-waiter {
+                    font-size: 11px;
+                }
+            }
+
+            @media (max-width: 1200px) {
+                .tables-grid {
+                    grid-template-columns: repeat(auto-fit, minmax(95px, 1fr));
+                }
+                
+                .table-tile {
+                    width: 95px;
+                    height: 80px;
+                    font-size: 12px;
                 }
             }
         </style>
@@ -606,7 +652,7 @@ def index():
             <div class="card share top-card">
                 <h2>📊 Розподіл замовлень</h2>
                 <div class="pie-container">
-                    <canvas id="pie" width="220" height="220"></canvas>
+                    <canvas id="pie" width="180" height="180"></canvas>
                 </div>
             </div>
 
@@ -624,7 +670,7 @@ def index():
 
             <!-- Нижний ряд -->
             <div class="card chart-card">
-                <h2>📈 Замовлення по годинах (накопич.)</h2>
+                <h2>📈 Замовлення по годинам (накопич.)</h2>
                 <div class="chart-container">
                     <canvas id="chart"></canvas>
                 </div>
@@ -678,7 +724,7 @@ def index():
 
             function fill(id, today, prev){
                 const el = document.getElementById(id);
-                let html = "<tr><th>Категорія</th><th>Сьогодні</th><th>Мин. тиждень</th></tr>";
+                let html = "<tr><th>Категорі</th><th>Сьогодні</th><th>Мин. тиждень</th></tr>";
                 const keys = new Set([...Object.keys(today), ...Object.keys(prev)]);
                 keys.forEach(k => {
                     html += `<tr><td>${k}</td><td>${today[k]||0}</td><td>${prev[k]||0}</td></tr>`;
@@ -688,7 +734,7 @@ def index():
             fill('hot_tbl', data.hot||{}, data.hot_prev||{});
             fill('cold_tbl', data.cold||{}, data.cold_prev||{});
 
-            // Pie chart - полноценный пирог с подписями внутри
+            // Pie chart - компактный пирог с подписями внутри
             Chart.register(ChartDataLabels);
             const ctx2 = document.getElementById('pie').getContext('2d');
             if(pie) pie.destroy();
@@ -711,7 +757,7 @@ def index():
                         tooltip:{enabled:false},
                         datalabels:{
                             color:'#fff',
-                            font:{weight:'bold', size:13, family:'Inter'},
+                            font:{weight:'bold', size:11, family:'Inter'},
                             formatter:function(value, context){
                                 const label = context.chart.data.labels[context.dataIndex];
                                 return label + '\\n' + value + '%';
@@ -788,7 +834,7 @@ def index():
                         legend:{
                             labels:{
                                 color:'#8e8e93',
-                                font: { size: 10 },
+                                font: { size: 9 },
                                 usePointStyle: true,
                                 pointStyle: 'circle'
                             }
@@ -797,12 +843,12 @@ def index():
                     },
                     scales:{
                         x:{
-                            ticks:{color:'#8e8e93', font: { size: 10 }},
+                            ticks:{color:'#8e8e93', font: { size: 9 }},
                             grid:{color:'rgba(142, 142, 147, 0.2)'},
                             border:{color:'#38383a'}
                         },
                         y:{
-                            ticks:{color:'#8e8e93', font: { size: 10 }},
+                            ticks:{color:'#8e8e93', font: { size: 9 }},
                             grid:{color:'rgba(142, 142, 147, 0.2)'},
                             border:{color:'#38383a'},
                             beginAtZero:true
