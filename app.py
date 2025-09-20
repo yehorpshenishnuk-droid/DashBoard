@@ -359,16 +359,16 @@ def index():
                 min-height: 0;
             }
 
-            /* Таблицы в карточках - УВЕЛИЧЕННЫЙ шрифт */
+            /* Таблицы в карточках - оптимизированный шрифт */
             table {
                 width: 100%;
                 border-collapse: collapse;
-                font-size: 16px;
+                font-size: 13px;
                 margin-top: auto;
             }
 
             th, td {
-                padding: 6px 8px;
+                padding: 5px 7px;
                 text-align: right;
                 border-bottom: 1px solid var(--border-color);
             }
@@ -380,15 +380,15 @@ def index():
             th {
                 color: var(--text-secondary);
                 font-weight: 600;
-                font-size: 14px;
+                font-size: 11px;
                 text-transform: uppercase;
                 letter-spacing: 0.5px;
             }
 
             td {
                 color: var(--text-primary);
-                font-weight: 700;
-                font-size: 16px;
+                font-weight: 600;
+                font-size: 13px;
             }
 
             /* Блок с распределением заказов - компактный пирог */
@@ -605,15 +605,15 @@ def index():
                 }
                 
                 table {
-                    font-size: 14px;
-                }
-                
-                th {
                     font-size: 12px;
                 }
                 
+                th {
+                    font-size: 10px;
+                }
+                
                 td {
-                    font-size: 14px;
+                    font-size: 12px;
                 }
                 
                 .table-tile {
