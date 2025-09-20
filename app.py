@@ -279,47 +279,380 @@ def api_tables():
 @app.route("/")
 def index():
     template = """
-    <html>
+    <!DOCTYPE html>
+    <html lang="uk">
     <head>
         <meta charset="utf-8" />
+        <meta name="viewport" content="width=device-width, initial-scale=1.0">
+        <title>Kitchen Dashboard</title>
         <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
         <script src="https://cdn.jsdelivr.net/npm/chartjs-plugin-datalabels@2"></script>
+        <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
         <style>
-            :root {
-                --bg:#0f0f0f; --panel:#151515; --fg:#eee;
-                --hot:#ff8800; --cold:#33b5ff; --bar:#9b59b6;
+            * {
+                margin: 0;
+                padding: 0;
+                box-sizing: border-box;
             }
-            body{margin:0;background:var(--bg);color:var(--fg);font-family:Inter,Arial,sans-serif}
-            .wrap{padding:10px;max-width:1800px;margin:0 auto}
-            .row{display:grid;grid-template-columns:repeat(4,1fr);gap:10px;margin-bottom:10px}
-            .card{background:var(--panel);border-radius:12px;padding:10px 14px;}
-            .card.chart{grid-column:1/-1;height:420px}
-            table{width:100%;border-collapse:collapse;font-size:16px}
-            th,td{padding:3px 6px;text-align:right}
-            th:first-child,td:first-child{text-align:left}
-            .logo{position:fixed;right:18px;bottom:12px;font-weight:800}
-            canvas{max-width:100%}
-            .tables{display:grid;grid-template-columns:repeat(4,1fr);gap:10px}
-            .table-tile{border-radius:10px;padding:18px;font-weight:bold;text-align:center;font-size:18px}
-            .occupied{background:#33b5ff;color:#000;}
-            .free{background:#555;color:#fff;}
+
+            :root {
+                --bg-primary: #000000;
+                --bg-secondary: #1c1c1e;
+                --bg-tertiary: #2c2c2e;
+                --text-primary: #ffffff;
+                --text-secondary: #8e8e93;
+                --accent-hot: #ff9500;
+                --accent-cold: #007aff;
+                --accent-bar: #af52de;
+                --accent-success: #30d158;
+                --accent-warning: #ff9500;
+                --border-color: #38383a;
+                --shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
+            }
+
+            body {
+                font-family: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+                background: var(--bg-primary);
+                color: var(--text-primary);
+                overflow: hidden;
+                height: 100vh;
+                padding: 12px;
+            }
+
+            .dashboard {
+                display: grid;
+                grid-template-columns: 1fr 1fr 1fr 1fr;
+                grid-template-rows: minmax(0, 35vh) minmax(0, 60vh);
+                gap: 12px;
+                height: 100vh;
+                max-height: 100vh;
+                padding: 0;
+            }
+
+            .card {
+                background: var(--bg-secondary);
+                border-radius: 16px;
+                padding: 16px;
+                border: 1px solid var(--border-color);
+                box-shadow: var(--shadow);
+                overflow: hidden;
+                display: flex;
+                flex-direction: column;
+            }
+
+            .card h2 {
+                font-size: 16px;
+                font-weight: 600;
+                margin-bottom: 12px;
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                color: var(--text-primary);
+            }
+
+            .card.hot h2 { color: var(--accent-hot); }
+            .card.cold h2 { color: var(--accent-cold); }
+            .card.share h2 { color: var(--accent-bar); }
+
+            /* Верхний ряд блоков */
+            .card.top-card {
+                min-height: 0;
+            }
+
+            /* Таблицы в карточках */
+            table {
+                width: 100%;
+                border-collapse: collapse;
+                font-size: 12px;
+                margin-top: auto;
+            }
+
+            th, td {
+                padding: 4px 6px;
+                text-align: right;
+                border-bottom: 1px solid var(--border-color);
+            }
+
+            th:first-child, td:first-child {
+                text-align: left;
+            }
+
+            th {
+                color: var(--text-secondary);
+                font-weight: 500;
+                font-size: 11px;
+                text-transform: uppercase;
+                letter-spacing: 0.5px;
+            }
+
+            td {
+                color: var(--text-primary);
+                font-weight: 500;
+            }
+
+            /* Блок с распределением заказов */
+            .pie-container {
+                flex: 1;
+                display: flex;
+                align-items: center;
+                justify-content: center;
+                min-height: 0;
+            }
+
+            /* Блок времени и погоды */
+            .time-weather {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                justify-content: space-between;
+                text-align: center;
+                flex: 1;
+            }
+
+            .clock {
+                font-size: 28px;
+                font-weight: 700;
+                color: var(--text-primary);
+                font-variant-numeric: tabular-nums;
+            }
+
+            .weather {
+                display: flex;
+                flex-direction: column;
+                align-items: center;
+                gap: 4px;
+                margin-top: 8px;
+            }
+
+            .weather img {
+                width: 48px;
+                height: 48px;
+            }
+
+            .temp {
+                font-size: 18px;
+                font-weight: 600;
+                color: var(--text-primary);
+            }
+
+            .desc {
+                font-size: 12px;
+                color: var(--text-secondary);
+                text-align: center;
+            }
+
+            /* График заказов */
+            .chart-card {
+                grid-column: 1 / 3;
+                display: flex;
+                flex-direction: column;
+            }
+
+            .chart-container {
+                flex: 1;
+                min-height: 0;
+                position: relative;
+            }
+
+            /* Столы */
+            .tables-card {
+                grid-column: 3 / 5;
+                display: flex;
+                flex-direction: column;
+            }
+
+            .tables-content {
+                flex: 1;
+                display: flex;
+                flex-direction: column;
+                gap: 12px;
+                min-height: 0;
+            }
+
+            .tables-zone {
+                flex: 1;
+                min-height: 0;
+            }
+
+            .tables-zone h3 {
+                font-size: 14px;
+                font-weight: 600;
+                margin-bottom: 8px;
+                color: var(--text-secondary);
+                display: flex;
+                align-items: center;
+                gap: 6px;
+            }
+
+            .tables-grid {
+                display: grid;
+                grid-template-columns: repeat(auto-fit, minmax(80px, 1fr));
+                gap: 6px;
+                height: calc(100% - 24px);
+            }
+
+            .table-tile {
+                border-radius: 12px;
+                padding: 8px;
+                font-weight: 600;
+                text-align: center;
+                font-size: 11px;
+                display: flex;
+                flex-direction: column;
+                justify-content: center;
+                gap: 2px;
+                transition: all 0.2s ease;
+                border: 1px solid var(--border-color);
+                min-height: 60px;
+            }
+
+            .table-tile.occupied {
+                background: linear-gradient(135deg, var(--accent-cold), #005ecb);
+                color: white;
+                border-color: var(--accent-cold);
+                box-shadow: 0 2px 8px rgba(0, 122, 255, 0.3);
+            }
+
+            .table-tile.free {
+                background: var(--bg-tertiary);
+                color: var(--text-secondary);
+                border-color: var(--border-color);
+            }
+
+            .table-number {
+                font-weight: 700;
+                font-size: 12px;
+            }
+
+            .table-waiter {
+                font-size: 10px;
+                opacity: 0.8;
+                overflow: hidden;
+                text-overflow: ellipsis;
+                white-space: nowrap;
+            }
+
+            /* Logo */
+            .logo {
+                position: fixed;
+                right: 20px;
+                bottom: 16px;
+                font-weight: 800;
+                font-size: 18px;
+                color: var(--text-secondary);
+                z-index: 1000;
+                background: var(--bg-secondary);
+                padding: 8px 12px;
+                border-radius: 8px;
+                border: 1px solid var(--border-color);
+            }
+
+            /* Canvas styling */
+            canvas {
+                max-width: 100% !important;
+                max-height: 100% !important;
+            }
+
+            /* Scrollbar styling */
+            .scrollable {
+                overflow-y: auto;
+                scrollbar-width: thin;
+                scrollbar-color: var(--border-color) transparent;
+            }
+
+            .scrollable::-webkit-scrollbar {
+                width: 4px;
+            }
+
+            .scrollable::-webkit-scrollbar-track {
+                background: transparent;
+            }
+
+            .scrollable::-webkit-scrollbar-thumb {
+                background: var(--border-color);
+                border-radius: 2px;
+            }
+
+            /* Responsive adjustments */
+            @media (max-height: 900px) {
+                .dashboard {
+                    grid-template-rows: minmax(0, 32vh) minmax(0, 63vh);
+                }
+                
+                .card {
+                    padding: 12px;
+                }
+                
+                .card h2 {
+                    font-size: 14px;
+                    margin-bottom: 8px;
+                }
+                
+                .clock {
+                    font-size: 24px;
+                }
+            }
         </style>
     </head>
     <body>
-        <div class="wrap">
-            <div class="row">
-                <div class="card hot"><h2>🔥 Гарячий цех</h2><table id="hot_tbl"></table></div>
-                <div class="card cold"><h2>❄️ Холодний цех</h2><table id="cold_tbl"></table></div>
-                <div class="card share"><h2>📊 Розподіл замовлень</h2><canvas id="pie" height="180"></canvas></div>
-                <div class="card weather"><h2>🕒 Час і погода</h2>
-                    <div id="clock" style="font-size:32px;margin-top:10px"></div>
-                    <div id="weather" style="margin-top:10px;font-size:18px"></div>
+        <div class="dashboard">
+            <!-- Верхний ряд -->
+            <div class="card hot top-card">
+                <h2>🔥 Гарячий цех</h2>
+                <div class="scrollable" style="flex: 1;">
+                    <table id="hot_tbl"></table>
                 </div>
-                <div class="card chart"><h2>📈 Замовлення по годинах (накопич.)</h2><canvas id="chart"></canvas></div>
-                <div class="card tables"><h2>🍴 Зал</h2><div id="hall" class="tables"></div></div>
-                <div class="card tables"><h2>🌿 Літня тераса</h2><div id="terrace" class="tables"></div></div>
+            </div>
+
+            <div class="card cold top-card">
+                <h2>❄️ Холодний цех</h2>
+                <div class="scrollable" style="flex: 1;">
+                    <table id="cold_tbl"></table>
+                </div>
+            </div>
+
+            <div class="card share top-card">
+                <h2>📊 Розподіл замовлень</h2>
+                <div class="pie-container">
+                    <canvas id="pie" width="200" height="200"></canvas>
+                </div>
+            </div>
+
+            <div class="card top-card">
+                <h2>🕐 Час і погода</h2>
+                <div class="time-weather">
+                    <div id="clock" class="clock"></div>
+                    <div class="weather">
+                        <div id="weather-icon"></div>
+                        <div id="weather-temp" class="temp"></div>
+                        <div id="weather-desc" class="desc"></div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Нижний ряд -->
+            <div class="card chart-card">
+                <h2>📈 Замовлення по годинах (накопич.)</h2>
+                <div class="chart-container">
+                    <canvas id="chart"></canvas>
+                </div>
+            </div>
+
+            <div class="card tables-card">
+                <h2>🍽️ Столи</h2>
+                <div class="tables-content">
+                    <div class="tables-zone">
+                        <h3>🏛️ Зал</h3>
+                        <div id="hall" class="tables-grid"></div>
+                    </div>
+                    <div class="tables-zone">
+                        <h3>🌿 Літня тераса</h3>
+                        <div id="terrace" class="tables-grid"></div>
+                    </div>
+                </div>
             </div>
         </div>
+
         <div class="logo">GRECO</div>
 
         <script>
@@ -339,7 +672,10 @@ def index():
             data.forEach(t=>{
                 const div = document.createElement("div");
                 div.className = "table-tile " + (t.occupied ? "occupied":"free");
-                div.innerHTML = `<div>${t.name}</div><div>${t.waiter}</div>`;
+                div.innerHTML = `
+                    <div class="table-number">${t.name}</div>
+                    <div class="table-waiter">${t.waiter}</div>
+                `;
                 el.appendChild(div);
             });
         }
@@ -360,28 +696,32 @@ def index():
             fill('hot_tbl', data.hot||{}, data.hot_prev||{});
             fill('cold_tbl', data.cold||{}, data.cold_prev||{});
 
+            // Pie chart
             Chart.register(ChartDataLabels);
             const ctx2 = document.getElementById('pie').getContext('2d');
             if(pie) pie.destroy();
             pie = new Chart(ctx2,{
-                type:'pie',
+                type:'doughnut',
                 data:{
                     labels:['Гарячий цех','Холодний цех','Бар'],
                     datasets:[{
                         data:[data.share.hot,data.share.cold,data.share.bar],
-                        backgroundColor:['#ff8800','#33b5ff','#9b59b6']
+                        backgroundColor:['#ff9500','#007aff','#af52de'],
+                        borderWidth: 0,
+                        cutout: '60%'
                     }]
                 },
                 options:{
+                    responsive: true,
+                    maintainAspectRatio: false,
                     plugins:{
                         legend:{display:false},
                         tooltip:{enabled:false},
                         datalabels:{
                             color:'#fff',
-                            font:{weight:'bold', size:14},
+                            font:{weight:'bold', size:11},
                             formatter:function(value, context){
-                                const label = context.chart.data.labels[context.dataIndex];
-                                return label + '\\n' + value + '%';
+                                return value + '%';
                             }
                         }
                     }
@@ -391,6 +731,7 @@ def index():
             let today_hot = cutToNow(data.hourly.labels, data.hourly.hot);
             let today_cold = cutToNow(data.hourly.labels, data.hourly.cold);
 
+            // Line chart
             const ctx = document.getElementById('chart').getContext('2d');
             if(chart) chart.destroy();
             chart = new Chart(ctx,{
@@ -398,32 +739,102 @@ def index():
                 data:{
                     labels:data.hourly.labels,
                     datasets:[
-                        {label:'Гарячий',data:today_hot,borderColor:'#ff8800',backgroundColor:'#ff8800',tension:0.25,fill:false},
-                        {label:'Холодний',data:today_cold,borderColor:'#33b5ff',backgroundColor:'#33b5ff',tension:0.25,fill:false},
-                        {label:'Гарячий (мин. тижд.)',data:data.hourly_prev.hot,borderColor:'#ff8800',borderDash:[6,4],tension:0.25,fill:false},
-                        {label:'Холодний (мин. тижд.)',data:data.hourly_prev.cold,borderColor:'#33b5ff',borderDash:[6,4],tension:0.25,fill:false}
+                        {
+                            label:'Гарячий',
+                            data:today_hot,
+                            borderColor:'#ff9500',
+                            backgroundColor:'rgba(255, 149, 0, 0.1)',
+                            tension:0.4,
+                            fill:false,
+                            borderWidth: 2,
+                            pointRadius: 3,
+                            pointBackgroundColor: '#ff9500'
+                        },
+                        {
+                            label:'Холодний',
+                            data:today_cold,
+                            borderColor:'#007aff',
+                            backgroundColor:'rgba(0, 122, 255, 0.1)',
+                            tension:0.4,
+                            fill:false,
+                            borderWidth: 2,
+                            pointRadius: 3,
+                            pointBackgroundColor: '#007aff'
+                        },
+                        {
+                            label:'Гарячий (мин. тижд.)',
+                            data:data.hourly_prev.hot,
+                            borderColor:'rgba(255, 149, 0, 0.5)',
+                            borderDash:[6,4],
+                            tension:0.4,
+                            fill:false,
+                            borderWidth: 1,
+                            pointRadius: 2
+                        },
+                        {
+                            label:'Холодний (мин. тижд.)',
+                            data:data.hourly_prev.cold,
+                            borderColor:'rgba(0, 122, 255, 0.5)',
+                            borderDash:[6,4],
+                            tension:0.4,
+                            fill:false,
+                            borderWidth: 1,
+                            pointRadius: 2
+                        }
                     ]
                 },
                 options:{
                     responsive:true,
+                    maintainAspectRatio: false,
+                    interaction: {
+                        intersect: false,
+                        mode: 'index'
+                    },
                     plugins:{
-                        legend:{labels:{color:'#ddd'}},
+                        legend:{
+                            labels:{
+                                color:'#8e8e93',
+                                font: { size: 10 },
+                                usePointStyle: true,
+                                pointStyle: 'circle'
+                            }
+                        },
                         datalabels:{display:false}
                     },
                     scales:{
-                        x:{ticks:{color:'#bbb'},title:{display:true,text:'Час'}},
-                        y:{ticks:{color:'#bbb'},beginAtZero:true}
+                        x:{
+                            ticks:{color:'#8e8e93', font: { size: 10 }},
+                            grid:{color:'rgba(142, 142, 147, 0.2)'},
+                            border:{color:'#38383a'}
+                        },
+                        y:{
+                            ticks:{color:'#8e8e93', font: { size: 10 }},
+                            grid:{color:'rgba(142, 142, 147, 0.2)'},
+                            border:{color:'#38383a'},
+                            beginAtZero:true
+                        }
                     }
                 }
             });
 
+            // Update time
             const now = new Date();
             document.getElementById('clock').innerText = now.toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'});
+            
+            // Update weather
             const w = data.weather||{};
-            let whtml = "";
-            if(w.icon){ whtml += `<img src="https://openweathermap.org/img/wn/${w.icon}@2x.png" style="vertical-align:middle">`; }
-            whtml += ` ${w.temp||'—'}<br>${w.desc||'—'}`;
-            document.getElementById('weather').innerHTML = whtml;
+            const iconEl = document.getElementById('weather-icon');
+            const tempEl = document.getElementById('weather-temp');
+            const descEl = document.getElementById('weather-desc');
+            
+            if(w.icon) {
+                iconEl.innerHTML = `<img src="https://openweathermap.org/img/wn/${w.icon}@2x.png" alt="weather">`;
+            } else {
+                iconEl.innerHTML = '';
+            }
+            
+            tempEl.textContent = w.temp || '—';
+            descEl.textContent = w.desc || '—';
         }
 
         async function refreshTables(){
@@ -433,11 +844,11 @@ def index():
             renderTables('terrace', data.terrace||[]);
         }
 
-        // запуск сразу
+        // Запуск сразу
         refresh(); 
         refreshTables();
 
-        // автообновление
+        // Автообновление
         setInterval(refresh, 60000);
         setInterval(refreshTables, 30000);
         </script>
