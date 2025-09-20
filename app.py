@@ -359,16 +359,16 @@ def index():
                 min-height: 0;
             }
 
-            /* Таблицы в карточках - уменьшенный шрифт */
+            /* Таблицы в карточках - УВЕЛИЧЕННЫЙ шрифт */
             table {
                 width: 100%;
                 border-collapse: collapse;
-                font-size: 12px;
+                font-size: 16px;
                 margin-top: auto;
             }
 
             th, td {
-                padding: 4px 6px;
+                padding: 6px 8px;
                 text-align: right;
                 border-bottom: 1px solid var(--border-color);
             }
@@ -380,15 +380,15 @@ def index():
             th {
                 color: var(--text-secondary);
                 font-weight: 600;
-                font-size: 10px;
+                font-size: 14px;
                 text-transform: uppercase;
                 letter-spacing: 0.5px;
             }
 
             td {
                 color: var(--text-primary);
-                font-weight: 600;
-                font-size: 11px;
+                font-weight: 700;
+                font-size: 16px;
             }
 
             /* Блок с распределением заказов - компактный пирог */
@@ -415,40 +415,40 @@ def index():
             }
 
             .clock {
-                font-size: 52px;
-                font-weight: 800;
+                font-size: 68px;
+                font-weight: 900;
                 color: var(--text-primary);
                 font-variant-numeric: tabular-nums;
-                margin-bottom: 10px;
-                line-height: 0.9;
+                margin-bottom: 8px;
+                line-height: 0.85;
             }
 
             .weather {
                 display: flex;
                 flex-direction: column;
                 align-items: center;
-                gap: 5px;
+                gap: 4px;
                 flex: 1;
             }
 
             .weather img {
-                width: 80px;
-                height: 80px;
-                margin-bottom: 5px;
+                width: 100px;
+                height: 100px;
+                margin-bottom: 2px;
             }
 
             .temp {
-                font-size: 28px;
-                font-weight: 700;
+                font-size: 36px;
+                font-weight: 800;
                 color: var(--text-primary);
                 line-height: 1;
             }
 
             .desc {
-                font-size: 13px;
+                font-size: 15px;
                 color: var(--text-secondary);
                 text-align: center;
-                font-weight: 500;
+                font-weight: 600;
             }
 
             /* График заказов */
@@ -496,26 +496,26 @@ def index():
 
             .tables-grid {
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(110px, 1fr));
-                gap: 6px;
+                grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
+                gap: 8px;
                 height: calc(100% - 20px);
                 align-content: start;
             }
 
             .table-tile {
-                border-radius: 10px;
-                padding: 12px 8px;
+                border-radius: 12px;
+                padding: 15px 10px;
                 font-weight: 700;
                 text-align: center;
-                font-size: 13px;
+                font-size: 16px;
                 display: flex;
                 flex-direction: column;
                 justify-content: center;
-                gap: 4px;
+                gap: 6px;
                 transition: all 0.2s ease;
                 border: 1px solid var(--border-color);
-                height: 85px;
-                width: 110px;
+                height: 105px;
+                width: 130px;
                 justify-self: center;
             }
 
@@ -533,14 +533,14 @@ def index():
             }
 
             .table-number {
-                font-weight: 700;
-                font-size: 15px;
-                margin-bottom: 3px;
+                font-weight: 800;
+                font-size: 18px;
+                margin-bottom: 4px;
             }
 
             .table-waiter {
-                font-size: 12px;
-                font-weight: 600;
+                font-size: 14px;
+                font-weight: 700;
                 opacity: 0.95;
                 overflow: hidden;
                 text-overflow: ellipsis;
@@ -592,42 +592,62 @@ def index():
                 }
                 
                 .clock {
-                    font-size: 44px;
+                    font-size: 56px;
                 }
                 
                 .weather img {
-                    width: 65px;
-                    height: 65px;
+                    width: 85px;
+                    height: 85px;
                 }
                 
                 .temp {
-                    font-size: 24px;
+                    font-size: 30px;
+                }
+                
+                table {
+                    font-size: 14px;
+                }
+                
+                th {
+                    font-size: 12px;
+                }
+                
+                td {
+                    font-size: 14px;
                 }
                 
                 .table-tile {
-                    height: 75px;
-                    width: 100px;
-                    padding: 10px 6px;
+                    height: 90px;
+                    width: 115px;
+                    padding: 12px 8px;
                 }
                 
                 .table-number {
-                    font-size: 13px;
+                    font-size: 16px;
                 }
                 
                 .table-waiter {
-                    font-size: 11px;
+                    font-size: 13px;
                 }
             }
 
             @media (max-width: 1200px) {
                 .tables-grid {
-                    grid-template-columns: repeat(auto-fit, minmax(95px, 1fr));
+                    grid-template-columns: repeat(auto-fit, minmax(115px, 1fr));
                 }
                 
                 .table-tile {
-                    width: 95px;
-                    height: 80px;
-                    font-size: 12px;
+                    width: 115px;
+                    height: 95px;
+                    font-size: 15px;
+                }
+                
+                .table-number {
+                    font-size: 17px;
+                }
+                
+                .table-waiter {
+                    font-size: 13px;
                 }
             }
         </style>
