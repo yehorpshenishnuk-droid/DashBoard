@@ -7,25 +7,28 @@ from flask import Flask, render_template_string, jsonify
 
 app = Flask(__name__)
 
-# ==== Конфиг ====
+# ==== Конфіг ====
 ACCOUNT_NAME = "poka-net3"
-POSTER_TOKEN = os.getenv("POSTER_TOKEN")           # обязателен
-CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")           # опционален (бронирования)
-WEATHER_KEY = os.getenv("WEATHER_KEY", "")         # API ключ OpenWeather
+POSTER_TOKEN = os.getenv("POSTER_TOKEN")
+CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")
+WEATHER_KEY = os.getenv("WEATHER_KEY", "")
 
-# Категории POS ID
+# Категорії POS ID
 HOT_CATEGORIES  = {4, 13, 15, 46, 33}
 COLD_CATEGORIES = {7, 8, 11, 16, 18, 19, 29, 32, 36, 44}
 BAR_CATEGORIES  = {9,14,27,28,34,41,42,47,22,24,25,26,39,30}
 
-# Кэш
+# Кеш
 PRODUCT_CACHE = {}
 PRODUCT_CACHE_TS = 0
 CACHE = {
     "hot": {}, "cold": {}, "hot_prev": {}, "cold_prev": {},
-    "hourly": {}, "hourly_prev": {}, "share": {}
+    "hourly": {}, "hourly_prev": {}, "hourly_year": {}, "share": {}
 }
 CACHE_TS = 0
+
+BOOKINGS_CACHE = []
+BOOKINGS_CACHE_TS = 0
 
 # ===== Helpers =====
 def _get(url, **kwargs):
@@ -35,7 +38,7 @@ def _get(url, **kwargs):
     r.raise_for_status()
     return r
 
-# ===== Справочник товаров =====
+# ===== Довідник товарів =====
 def load_products():
     global PRODUCT_CACHE, PRODUCT_CACHE_TS
     if PRODUCT_CACHE and time.time() - PRODUCT_CACHE_TS < 3600:
@@ -78,7 +81,7 @@ def load_products():
     print(f"DEBUG products cached: {len(PRODUCT_CACHE)} items", file=sys.stderr, flush=True)
     return PRODUCT_CACHE
 
-# ===== Сводные продажи =====
+# ===== Зведені продажі =====
 def fetch_category_sales(day_offset=0):
     target_date = (date.today() - timedelta(days=day_offset)).strftime("%Y-%m-%d")
     url = (
@@ -113,11 +116,10 @@ def fetch_category_sales(day_offset=0):
     bar = dict(sorted(bar.items(), key=lambda x: x[0]))
     return {"hot": hot, "cold": cold, "bar": bar}
 
-# ===== Почасовая диаграмма =====
-def fetch_transactions_hourly(day_offset=0):
+# ===== Функція для отримання даних по конкретній даті =====
+def fetch_transactions_hourly_for_date(target_date_str):
     products = load_products()
-    target_date = (date.today() - timedelta(days=day_offset)).strftime("%Y-%m-%d")
-
+    
     per_page = 500
     page = 1
     hours = list(range(10, 23))
@@ -127,7 +129,7 @@ def fetch_transactions_hourly(day_offset=0):
     while True:
         url = (
             f"https://{ACCOUNT_NAME}.joinposter.com/api/transactions.getTransactions"
-            f"?token={POSTER_TOKEN}&date_from={target_date}&date_to={target_date}"
+            f"?token={POSTER_TOKEN}&date_from={target_date_str}&date_to={target_date_str}"
             f"&per_page={per_page}&page={page}"
         )
         try:
@@ -138,7 +140,7 @@ def fetch_transactions_hourly(day_offset=0):
             page_info = body.get("page", {}) or {}
             per_page_resp = int(page_info.get("per_page", per_page) or per_page)
         except Exception as e:
-            print("ERROR transactions:", e, file=sys.stderr, flush=True)
+            print(f"ERROR transactions for {target_date_str}:", e, file=sys.stderr, flush=True)
             break
 
         if not items:
@@ -174,12 +176,33 @@ def fetch_transactions_hourly(day_offset=0):
     hot_cum, cold_cum = [], []
     th, tc = 0, 0
     for h, c in zip(hot_by_hour, cold_by_hour):
-        th += h; tc += c
+        th += h
+        tc += c
         hot_cum.append(th)
         cold_cum.append(tc)
 
     labels = [f"{h:02d}:00" for h in hours]
     return {"labels": labels, "hot": hot_cum, "cold": cold_cum}
+
+# ===== Почасова діаграма =====
+def fetch_transactions_hourly(day_offset=0):
+    target_date = (date.today() - timedelta(days=day_offset)).strftime("%Y-%m-%d")
+    return fetch_transactions_hourly_for_date(target_date)
+
+# ===== Отримання даних рік назад по дню тижня =====
+def fetch_transactions_hourly_year_ago():
+    today = date.today()
+    today_weekday = today.weekday()
+    
+    year_ago = today - timedelta(days=365)
+    year_ago_weekday = year_ago.weekday()
+    day_diff = today_weekday - year_ago_weekday
+    year_ago_same_weekday = year_ago + timedelta(days=day_diff)
+    
+    target_date_str = year_ago_same_weekday.strftime("%Y-%m-%d")
+    print(f"DEBUG: Year ago same weekday: {target_date_str} ({year_ago_same_weekday.strftime('%A')})", file=sys.stderr, flush=True)
+    
+    return fetch_transactions_hourly_for_date(target_date_str)
 
 # ===== Погода =====
 def fetch_weather():
@@ -197,7 +220,7 @@ def fetch_weather():
         print("ERROR weather:", e, file=sys.stderr, flush=True)
         return {"temp": "Н/Д", "desc": "Н/Д", "icon": ""}
 
-# ===== Столы =====
+# ===== Столи =====
 HALL_TABLES = [1,2,3,4,5,6,8]
 TERRACE_TABLES = [7,10,11,12,13]
 
@@ -218,7 +241,7 @@ def fetch_tables_with_waiters():
     for trx in rows:
         try:
             status = int(trx.get("status", 0))
-            if status == 2:   # закрытые пропускаем
+            if status == 2:
                 continue
             tname = int(trx.get("table_name", 0))
             waiter = trx.get("name", "—")
@@ -241,6 +264,97 @@ def fetch_tables_with_waiters():
 
     return {"hall": build(HALL_TABLES), "terrace": build(TERRACE_TABLES)}
 
+# ===== Бронювання Choice =====
+def fetch_bookings():
+    if not CHOICE_TOKEN:
+        print("WARNING: CHOICE_TOKEN not set", file=sys.stderr, flush=True)
+        return []
+
+    today = date.today()
+    from_dt = datetime.combine(today, datetime.min.time())
+    till_dt = datetime.combine(today, datetime.max.time())
+    
+    from_str = from_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    till_str = till_dt.strftime("%Y-%m-%dT%H:%M:%S.000Z")
+    
+    url = f"https://open-api.choiceqr.com/bookings/list?from={from_str}&till={till_str}&perPage=100"
+    
+    print(f"DEBUG: Fetching bookings from URL: {url}", file=sys.stderr, flush=True)
+    
+    headers = {
+        "Authorization": f"Bearer {CHOICE_TOKEN}",
+        "Content-Type": "application/json"
+    }
+    
+    try:
+        resp = requests.get(url, headers=headers, timeout=15)
+        
+        print(f"DEBUG: Choice API status: {resp.status_code}", file=sys.stderr, flush=True)
+        print(f"DEBUG: Choice API response: {resp.text[:500]}", file=sys.stderr, flush=True)
+        
+        if resp.status_code == 404:
+            print("WARNING: Choice API returned 404 - check endpoint URL or restaurant ID", file=sys.stderr, flush=True)
+            return []
+        
+        resp.raise_for_status()
+        bookings = resp.json()
+        
+        if not isinstance(bookings, list):
+            print(f"ERROR: Expected list, got {type(bookings)}", file=sys.stderr, flush=True)
+            return []
+        
+        now = datetime.now()
+        future_bookings = []
+        
+        for b in bookings:
+            try:
+                dt_str = b.get("dateTime")
+                if not dt_str:
+                    continue
+                
+                try:
+                    if '+' in dt_str:
+                        dt_str_naive = dt_str.split('+')[0]
+                    elif 'Z' in dt_str:
+                        dt_str_naive = dt_str.replace('Z', '')
+                    else:
+                        dt_str_naive = dt_str
+                    
+                    booking_dt = datetime.fromisoformat(dt_str_naive)
+                except:
+                    booking_dt = datetime.strptime(dt_str[:19], "%Y-%m-%dT%H:%M:%S")
+                
+                if booking_dt < now:
+                    continue
+                
+                person_count = b.get("personCount", 0)
+                customer = b.get("customer", {})
+                name = customer.get("name", "—")
+                phone = customer.get("phone", "")
+                
+                future_bookings.append({
+                    "time": booking_dt.strftime("%H:%M"),
+                    "guests": person_count,
+                    "name": name,
+                    "phone": phone,
+                    "datetime_obj": booking_dt
+                })
+            except Exception as e:
+                print(f"ERROR parsing booking: {e}", file=sys.stderr, flush=True)
+                continue
+        
+        future_bookings.sort(key=lambda x: x["datetime_obj"])
+        
+        for b in future_bookings:
+            del b["datetime_obj"]
+        
+        print(f"DEBUG: Found {len(future_bookings)} future bookings", file=sys.stderr, flush=True)
+        return future_bookings
+        
+    except Exception as e:
+        print(f"ERROR fetching bookings: {e}", file=sys.stderr, flush=True)
+        return []
+
 # ===== API =====
 @app.route("/api/sales")
 def api_sales():
@@ -250,6 +364,7 @@ def api_sales():
         sums_prev = fetch_category_sales(7)
         hourly = fetch_transactions_hourly(0)
         prev = fetch_transactions_hourly(7)
+        year = fetch_transactions_hourly_year_ago()
 
         total_hot = sum(sums_today["hot"].values())
         total_cold = sum(sums_today["cold"].values())
@@ -264,7 +379,7 @@ def api_sales():
         CACHE.update({
             "hot": sums_today["hot"], "cold": sums_today["cold"],
             "hot_prev": sums_prev["hot"], "cold_prev": sums_prev["cold"],
-            "hourly": hourly, "hourly_prev": prev,
+            "hourly": hourly, "hourly_prev": prev, "hourly_year": year,
             "share": share, "weather": fetch_weather()
         })
         CACHE_TS = time.time()
@@ -274,6 +389,14 @@ def api_sales():
 @app.route("/api/tables")
 def api_tables():
     return jsonify(fetch_tables_with_waiters())
+
+@app.route("/api/bookings")
+def api_bookings():
+    global BOOKINGS_CACHE, BOOKINGS_CACHE_TS
+    if time.time() - BOOKINGS_CACHE_TS > 600:
+        BOOKINGS_CACHE = fetch_bookings()
+        BOOKINGS_CACHE_TS = time.time()
+    return jsonify(BOOKINGS_CACHE)
 
 # ===== UI =====
 @app.route("/")
@@ -304,8 +427,10 @@ def index():
                 --accent-hot: #ff9500;
                 --accent-cold: #007aff;
                 --accent-bar: #af52de;
+                --accent-booking: #34c759;
                 --accent-success: #30d158;
                 --accent-warning: #ff9500;
+                --accent-danger: #ff453a;
                 --border-color: #38383a;
                 --shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
             }
@@ -321,11 +446,11 @@ def index():
 
             .dashboard {
                 display: grid;
-                grid-template-columns: 1fr 1fr 1fr 1fr;
-                grid-template-rows: minmax(0, 35vh) minmax(0, 58vh);
+                grid-template-columns: 1fr 1fr 1fr 1fr 1fr;
+                grid-template-rows: minmax(0, 32vh) minmax(0, 60vh);
                 gap: 8px;
-                height: calc(100vh - 25px);
-                max-height: calc(100vh - 25px);
+                height: calc(100vh - 16px);
+                max-height: calc(100vh - 16px);
                 padding: 0;
             }
 
@@ -338,10 +463,11 @@ def index():
                 overflow: hidden;
                 display: flex;
                 flex-direction: column;
+                min-height: 0;
             }
 
             .card h2 {
-                font-size: 14px;
+                font-size: 13px;
                 font-weight: 600;
                 margin-bottom: 8px;
                 display: flex;
@@ -353,45 +479,34 @@ def index():
             .card.hot h2 { color: var(--accent-hot); }
             .card.cold h2 { color: var(--accent-cold); }
             .card.share h2 { color: var(--accent-bar); }
+            .card.bookings h2 { color: var(--accent-booking); }
 
-            /* Верхний ряд блоков */
-            .card.top-card {
-                min-height: 0;
-            }
+            .card.top-card { min-height: 0; }
 
-            /* Таблицы в карточках - оптимизированный шрифт */
             table {
                 width: 100%;
                 border-collapse: collapse;
-                font-size: 13px;
-                margin-top: auto;
+                font-size: 12px;
             }
 
             th, td {
-                padding: 5px 7px;
+                padding: 4px 6px;
                 text-align: right;
                 border-bottom: 1px solid var(--border-color);
             }
 
-            th:first-child, td:first-child {
-                text-align: left;
-            }
+            th:first-child, td:first-child { text-align: left; }
 
             th {
                 color: var(--text-secondary);
                 font-weight: 600;
-                font-size: 11px;
+                font-size: 10px;
                 text-transform: uppercase;
                 letter-spacing: 0.5px;
             }
 
-            td {
-                color: var(--text-primary);
-                font-weight: 600;
-                font-size: 13px;
-            }
+            td { color: var(--text-primary); font-weight: 600; font-size: 12px; }
 
-            /* Блок с распределением заказов - компактный пирог */
             .pie-container {
                 flex: 1;
                 display: flex;
@@ -402,7 +517,6 @@ def index():
                 padding: 5px;
             }
 
-            /* Блок времени и погоды - МАКСИМАЛЬНО УВЕЛИЧЕН */
             .time-weather {
                 display: flex;
                 flex-direction: column;
@@ -410,52 +524,37 @@ def index():
                 justify-content: center;
                 text-align: center;
                 flex: 1;
-                padding: 5px;
+                padding: 0px;
                 height: 100%;
+                min-height: 0;
             }
 
             .clock {
-                font-size: 68px;
+                font-size: 56px;
                 font-weight: 900;
                 color: var(--text-primary);
                 font-variant-numeric: tabular-nums;
-                margin-bottom: 8px;
-                line-height: 0.85;
+                margin-bottom: 4px;
+                line-height: 0.9;
             }
 
             .weather {
                 display: flex;
                 flex-direction: column;
                 align-items: center;
-                gap: 4px;
+                gap: 2px;
                 flex: 1;
             }
 
-            .weather img {
-                width: 100px;
-                height: 100px;
-                margin-bottom: 2px;
-            }
+            .weather img { width: 80px; height: 80px; margin: 0; }
+            .temp { font-size: 30px; font-weight: 800; color: var(--text-primary); line-height: 1; }
+            .desc { font-size: 13px; color: var(--text-secondary); text-align: center; font-weight: 600; }
 
-            .temp {
-                font-size: 36px;
-                font-weight: 800;
-                color: var(--text-primary);
-                line-height: 1;
-            }
-
-            .desc {
-                font-size: 15px;
-                color: var(--text-secondary);
-                text-align: center;
-                font-weight: 600;
-            }
-
-            /* График заказов */
             .chart-card {
-                grid-column: 1 / 3;
+                grid-column: 1 / 4;
                 display: flex;
                 flex-direction: column;
+                min-height: 0;
             }
 
             .chart-container {
@@ -464,11 +563,82 @@ def index():
                 position: relative;
             }
 
-            /* Столы - МАКСИМАЛЬНО УВЕЛИЧЕНЫ */
-            .tables-card {
-                grid-column: 3 / 5;
+            .bookings-card {
+                grid-column: 4 / 5;
                 display: flex;
                 flex-direction: column;
+                min-height: 0;
+            }
+
+            .bookings-list {
+                flex: 1;
+                overflow-y: auto;
+                overflow-x: hidden;
+                min-height: 0;
+                padding-right: 2px;
+            }
+
+            .bookings-list::-webkit-scrollbar {
+                width: 5px;
+            }
+
+            .bookings-list::-webkit-scrollbar-track {
+                background: var(--bg-tertiary);
+                border-radius: 3px;
+            }
+
+            .bookings-list::-webkit-scrollbar-thumb {
+                background: var(--border-color);
+                border-radius: 3px;
+            }
+
+            .bookings-list::-webkit-scrollbar-thumb:hover {
+                background: var(--text-secondary);
+            }
+
+            .booking-item {
+                background: var(--bg-tertiary);
+                border-radius: 6px;
+                padding: 8px;
+                margin-bottom: 6px;
+                border: 1px solid var(--border-color);
+                transition: all 0.2s ease;
+            }
+
+            .booking-item:hover {
+                border-color: var(--accent-booking);
+                background: rgba(52, 199, 89, 0.1);
+            }
+
+            .booking-time {
+                font-size: 20px;
+                font-weight: 800;
+                color: var(--accent-booking);
+                margin-bottom: 2px;
+            }
+
+            .booking-guests {
+                font-size: 14px;
+                font-weight: 700;
+                color: var(--text-primary);
+                display: flex;
+                align-items: center;
+                gap: 4px;
+            }
+
+            .booking-empty {
+                text-align: center;
+                padding: 30px 15px;
+                color: var(--text-secondary);
+                font-size: 13px;
+            }
+
+            .tables-card {
+                grid-column: 5 / 6;
+                grid-row: 1 / 3;
+                display: flex;
+                flex-direction: column;
+                min-height: 0;
             }
 
             .tables-content {
@@ -477,17 +647,27 @@ def index():
                 flex-direction: column;
                 gap: 8px;
                 min-height: 0;
+                overflow: hidden;
             }
 
             .tables-zone {
-                flex: 1;
                 min-height: 0;
+                display: flex;
+                flex-direction: column;
+            }
+
+            .tables-zone:first-child {
+                flex: 1.4;
+            }
+
+            .tables-zone:last-child {
+                flex: 1;
             }
 
             .tables-zone h3 {
-                font-size: 12px;
+                font-size: 11px;
                 font-weight: 600;
-                margin-bottom: 6px;
+                margin-bottom: 5px;
                 color: var(--text-secondary);
                 display: flex;
                 align-items: center;
@@ -496,27 +676,36 @@ def index():
 
             .tables-grid {
                 display: grid;
-                grid-template-columns: repeat(auto-fit, minmax(130px, 1fr));
-                gap: 8px;
-                height: calc(100% - 20px);
+                grid-template-columns: 1fr 1fr;
+                gap: 5px;
+                flex: 1;
                 align-content: start;
             }
 
+            .tables-zone:first-child .tables-grid {
+                grid-auto-rows: 90px;
+            }
+
+            .tables-zone:last-child .tables-grid {
+                grid-auto-rows: 70px;
+            }
+
             .table-tile {
-                border-radius: 12px;
-                padding: 15px 10px;
+                border-radius: 10px;
+                padding: 8px 6px;
                 font-weight: 700;
                 text-align: center;
-                font-size: 16px;
+                font-size: 14px;
                 display: flex;
                 flex-direction: column;
                 justify-content: center;
-                gap: 6px;
+                gap: 4px;
                 transition: all 0.2s ease;
                 border: 1px solid var(--border-color);
-                height: 105px;
-                width: 130px;
-                justify-self: center;
+                background: var(--bg-tertiary);
+                width: 100%;
+                height: 100%;
+                color: var(--text-secondary);
             }
 
             .table-tile.occupied {
@@ -526,135 +715,60 @@ def index():
                 box-shadow: 0 2px 8px rgba(0, 122, 255, 0.3);
             }
 
-            .table-tile.free {
-                background: var(--bg-tertiary);
-                color: var(--text-secondary);
-                border-color: var(--border-color);
+            .tables-zone:first-child .table-number { 
+                font-weight: 800; 
+                font-size: 16px; 
+                margin-bottom: 2px; 
             }
 
-            .table-number {
-                font-weight: 800;
-                font-size: 18px;
-                margin-bottom: 4px;
+            .tables-zone:last-child .table-number { 
+                font-weight: 800; 
+                font-size: 13px; 
+                margin-bottom: 1px; 
             }
 
-            .table-waiter {
-                font-size: 14px;
-                font-weight: 700;
-                opacity: 0.95;
-                overflow: hidden;
-                text-overflow: ellipsis;
-                white-space: nowrap;
-                max-width: 100%;
-                line-height: 1.2;
+            .tables-zone:first-child .table-waiter { 
+                font-size: 12px; 
+                font-weight: 700; 
+                opacity: 0.95; 
+                overflow: hidden; 
+                text-overflow: ellipsis; 
+                white-space: nowrap; 
+                max-width: 100%; 
+                line-height: 1.2; 
             }
 
-            /* Logo - компактный */
+            .tables-zone:last-child .table-waiter { 
+                font-size: 10px; 
+                font-weight: 700; 
+                opacity: 0.95; 
+                overflow: hidden; 
+                text-overflow: ellipsis; 
+                white-space: nowrap; 
+                max-width: 100%; 
+                line-height: 1.1; 
+            }
+
             .logo {
                 position: fixed;
                 right: 15px;
                 bottom: 5px;
                 font-family: 'Inter', sans-serif;
                 font-weight: 800;
-                font-size: 14px;
+                font-size: 13px;
                 color: #ffffff;
                 z-index: 1000;
                 background: var(--bg-secondary);
-                padding: 4px 8px;
+                padding: 3px 7px;
                 border-radius: 6px;
                 border: 1px solid var(--border-color);
             }
 
-            /* Canvas styling */
-            canvas {
-                max-width: 100% !important;
-                max-height: 100% !important;
-            }
-
-            /* Responsive adjustments для очень маленьких экранов */
-            @media (max-height: 800px) {
-                body {
-                    padding: 6px;
-                }
-                
-                .dashboard {
-                    gap: 6px;
-                    grid-template-rows: minmax(0, 33vh) minmax(0, 60vh);
-                }
-                
-                .card {
-                    padding: 8px;
-                }
-                
-                .card h2 {
-                    font-size: 12px;
-                    margin-bottom: 6px;
-                }
-                
-                .clock {
-                    font-size: 56px;
-                }
-                
-                .weather img {
-                    width: 85px;
-                    height: 85px;
-                }
-                
-                .temp {
-                    font-size: 30px;
-                }
-                
-                table {
-                    font-size: 12px;
-                }
-                
-                th {
-                    font-size: 10px;
-                }
-                
-                td {
-                    font-size: 12px;
-                }
-                
-                .table-tile {
-                    height: 90px;
-                    width: 115px;
-                    padding: 12px 8px;
-                }
-                
-                .table-number {
-                    font-size: 16px;
-                }
-                
-                .table-waiter {
-                    font-size: 13px;
-                }
-            }
-
-            @media (max-width: 1200px) {
-                .tables-grid {
-                    grid-template-columns: repeat(auto-fit, minmax(115px, 1fr));
-                }
-                
-                .table-tile {
-                    width: 115px;
-                    height: 95px;
-                    font-size: 15px;
-                }
-                
-                .table-number {
-                    font-size: 17px;
-                }
-                
-                .table-waiter {
-                    font-size: 13px;
-                }
-            }
+            canvas { max-width: 100% !important; max-height: 100% !important; }
         </style>
     </head>
     <body>
         <div class="dashboard">
-            <!-- Верхний ряд -->
             <div class="card hot top-card">
                 <h2>🔥 Гарячий цех</h2>
                 <div style="flex: 1; overflow: hidden;">
@@ -672,11 +786,11 @@ def index():
             <div class="card share top-card">
                 <h2>📊 Розподіл замовлень</h2>
                 <div class="pie-container">
-                    <canvas id="pie" width="180" height="180"></canvas>
+                    <canvas id="pie" width="160" height="160"></canvas>
                 </div>
             </div>
 
-            <div class="card top-card">
+            <div class="card top-card" style="grid-column: 4 / 5;">
                 <h2>🕐 Час і погода</h2>
                 <div class="time-weather">
                     <div id="clock" class="clock"></div>
@@ -688,7 +802,6 @@ def index():
                 </div>
             </div>
 
-            <!-- Нижний ряд -->
             <div class="card chart-card">
                 <h2>📈 Замовлення по годинам (накопич.)</h2>
                 <div class="chart-container">
@@ -696,11 +809,16 @@ def index():
                 </div>
             </div>
 
+            <div class="card bookings-card bookings">
+                <h2>📅 Бронювання</h2>
+                <div id="bookings-list" class="bookings-list"></div>
+            </div>
+
             <div class="card tables-card">
                 <h2>🍽️ Столи</h2>
                 <div class="tables-content">
                     <div class="tables-zone">
-                        <h3>🏛️ Зал</h3>
+                        <h3>🛋️ Зал</h3>
                         <div id="hall" class="tables-grid"></div>
                     </div>
                     <div class="tables-zone">
@@ -729,10 +847,45 @@ def index():
             el.innerHTML = "";
             data.forEach(t=>{
                 const div = document.createElement("div");
-                div.className = "table-tile " + (t.occupied ? "occupied":"free");
+                div.className = "table-tile " + (t.occupied ? "occupied":"");
                 div.innerHTML = `
                     <div class="table-number">${t.name}</div>
                     <div class="table-waiter">${t.waiter}</div>
+                `;
+                el.appendChild(div);
+            });
+        }
+
+        function renderBookings(bookings){
+            const el = document.getElementById('bookings-list');
+            
+            if(!bookings || bookings.length === 0){
+                el.innerHTML = '<div class="booking-empty">🎉 Поки немає бронювань</div>';
+                return;
+            }
+
+            // Фільтруємо тільки майбутні бронювання
+            const now = new Date();
+            const currentTime = now.getHours() * 60 + now.getMinutes();
+            
+            const futureBookings = bookings.filter(b => {
+                const [hours, minutes] = b.time.split(':').map(Number);
+                const bookingTime = hours * 60 + minutes;
+                return bookingTime > currentTime;
+            });
+
+            if(futureBookings.length === 0){
+                el.innerHTML = '<div class="booking-empty">🎉 Поки немає бронювань</div>';
+                return;
+            }
+
+            el.innerHTML = '';
+            futureBookings.forEach(b => {
+                const div = document.createElement('div');
+                div.className = 'booking-item';
+                div.innerHTML = `
+                    <div class="booking-time">${b.time}</div>
+                    <div class="booking-guests">👥 ${b.guests} ${b.guests === 1 ? 'гість' : 'гостей'}</div>
                 `;
                 el.appendChild(div);
             });
@@ -744,17 +897,16 @@ def index():
 
             function fill(id, today, prev){
                 const el = document.getElementById(id);
-                let html = "<tr><th>Категорі</th><th>Сьогодні</th><th>Мин. тиждень</th></tr>";
-                const keys = new Set([...Object.keys(today), ...Object.keys(prev)]);
-                keys.forEach(k => {
-                    html += `<tr><td>${k}</td><td>${today[k]||0}</td><td>${prev[k]||0}</td></tr>`;
+                let html = "<tr><th>Категорія</th><th>Сьогодні</th><th>Мин. тиждень</th></tr>";
+                const keys = new Set([...Object.keys(today || {}), ...Object.keys(prev || {})]);
+                [...keys].sort().forEach(k => {
+                    html += `<tr><td>${k}</td><td>${(today||{})[k]||0}</td><td>${(prev||{})[k]||0}</td></tr>`;
                 });
                 el.innerHTML = html;
             }
             fill('hot_tbl', data.hot||{}, data.hot_prev||{});
             fill('cold_tbl', data.cold||{}, data.cold_prev||{});
 
-            // Pie chart - компактный пирог с подписями внутри
             Chart.register(ChartDataLabels);
             const ctx2 = document.getElementById('pie').getContext('2d');
             if(pie) pie.destroy();
@@ -777,7 +929,7 @@ def index():
                         tooltip:{enabled:false},
                         datalabels:{
                             color:'#fff',
-                            font:{weight:'bold', size:11, family:'Inter'},
+                            font:{weight:'bold', size:10, family:'Inter'},
                             formatter:function(value, context){
                                 const label = context.chart.data.labels[context.dataIndex];
                                 return label + '\\n' + value + '%';
@@ -791,7 +943,6 @@ def index():
             let today_hot = cutToNow(data.hourly.labels, data.hourly.hot);
             let today_cold = cutToNow(data.hourly.labels, data.hourly.cold);
 
-            // Line chart
             const ctx = document.getElementById('chart').getContext('2d');
             if(chart) chart.destroy();
             chart = new Chart(ctx,{
@@ -800,75 +951,121 @@ def index():
                     labels:data.hourly.labels,
                     datasets:[
                         {
-                            label:'Гарячий',
+                            label:'Сьогодні (Гарячий)',
                             data:today_hot,
                             borderColor:'#ff9500',
                             backgroundColor:'rgba(255, 149, 0, 0.1)',
                             tension:0.4,
                             fill:false,
-                            borderWidth: 2,
-                            pointRadius: 3,
+                            borderWidth: 3,
+                            pointRadius: 4,
                             pointBackgroundColor: '#ff9500'
                         },
                         {
-                            label:'Холодний',
+                            label:'Сьогодні (Холодний)',
                             data:today_cold,
                             borderColor:'#007aff',
                             backgroundColor:'rgba(0, 122, 255, 0.1)',
                             tension:0.4,
                             fill:false,
-                            borderWidth: 2,
-                            pointRadius: 3,
+                            borderWidth: 3,
+                            pointRadius: 4,
                             pointBackgroundColor: '#007aff'
                         },
                         {
-                            label:'Гарячий (мин. тиждн.)',
+                            label:'Прошла неділя (Гарячий)',
                             data:data.hourly_prev.hot,
-                            borderColor:'rgba(255, 149, 0, 0.5)',
-                            borderDash:[6,4],
+                            borderColor:'rgba(255, 149, 0, 0.7)',
+                            borderDash:[8,5],
                             tension:0.4,
                             fill:false,
-                            borderWidth: 1,
-                            pointRadius: 2
+                            borderWidth: 2,
+                            pointRadius: 0
                         },
                         {
-                            label:'Холодний (мин. тиждн.)',
+                            label:'Прошла неділя (Холодний)',
                             data:data.hourly_prev.cold,
-                            borderColor:'rgba(0, 122, 255, 0.5)',
-                            borderDash:[6,4],
+                            borderColor:'rgba(0, 122, 255, 0.7)',
+                            borderDash:[8,5],
                             tension:0.4,
                             fill:false,
-                            borderWidth: 1,
-                            pointRadius: 2
+                            borderWidth: 2,
+                            pointRadius: 0
+                        },
+                        {
+                            label:'Прошлий рік (Гарячий)',
+                            data:data.hourly_year.hot,
+                            borderColor:'rgba(255, 149, 0, 0.35)',
+                            tension:0.4,
+                            fill:false,
+                            borderWidth: 1.5,
+                            pointRadius: 0
+                        },
+                        {
+                            label:'Прошлий рік (Холодний)',
+                            data:data.hourly_year.cold,
+                            borderColor:'rgba(0, 122, 255, 0.35)',
+                            tension:0.4,
+                            fill:false,
+                            borderWidth: 1.5,
+                            pointRadius: 0
                         }
                     ]
                 },
                 options:{
                     responsive:true,
                     maintainAspectRatio: false,
-                    interaction: {
-                        intersect: false,
-                        mode: 'index'
-                    },
+                    interaction: { intersect: false, mode: 'index' },
                     plugins:{
                         legend:{
+                            display: true,
                             labels:{
-                                color:'#8e8e93',
-                                font: { size: 9 },
+                                color: '#ffffff',
+                                font: { 
+                                    size: 11, 
+                                    weight: '600',
+                                    family: 'Inter'
+                                },
                                 usePointStyle: true,
-                                pointStyle: 'circle'
+                                padding: 10,
+                                boxWidth: 10,
+                                boxHeight: 10,
+                                generateLabels: function(chart) {
+                                    const datasets = chart.data.datasets;
+                                    return datasets.map((dataset, i) => {
+                                        let pointStyle = 'circle';
+                                        
+                                        if (i === 2 || i === 3) {
+                                            pointStyle = 'line';
+                                        }
+                                        else if (i === 4 || i === 5) {
+                                            pointStyle = 'rect';
+                                        }
+                                        
+                                        return {
+                                            text: dataset.label,
+                                            fillStyle: dataset.borderColor,
+                                            strokeStyle: dataset.borderColor,
+                                            lineWidth: 2,
+                                            hidden: !chart.isDatasetVisible(i),
+                                            index: i,
+                                            pointStyle: pointStyle,
+                                            fontColor: '#ffffff'
+                                        };
+                                    });
+                                }
                             }
                         },
                         datalabels:{display:false}
                     },
                     scales:{
                         x:{
-                            ticks:{color:'#8e8e93', font: { size: 9 }},
+                            ticks:{color:'#ffffff', font: { size: 10 }},
                             grid:{color:'rgba(142, 142, 147, 0.2)'},
                             border:{color:'#38383a'}
                         },
                         y:{
-                            ticks:{color:'#8e8e93', font: { size: 9 }},
+                            ticks:{color:'#ffffff', font: { size: 10 }},
                             grid:{color:'rgba(142, 142, 147, 0.2)'},
                             border:{color:'#38383a'},
                             beginAtZero:true
@@ -877,11 +1074,9 @@ def index():
                 }
             });
 
-            // Update time
             const now = new Date();
             document.getElementById('clock').innerText = now.toLocaleTimeString('uk-UA',{hour:'2-digit',minute:'2-digit'});
             
-            // Update weather
             const w = data.weather||{};
             const iconEl = document.getElementById('weather-icon');
             const tempEl = document.getElementById('weather-temp');
@@ -904,13 +1099,19 @@ def index():
             renderTables('terrace', data.terrace||[]);
         }
 
-        // Запуск сразу
+        async function refreshBookings(){
+            const r = await fetch('/api/bookings');
+            const bookings = await r.json();
+            renderBookings(bookings);
+        }
+
         refresh(); 
         refreshTables();
+        refreshBookings();
 
-        // Автообновление
         setInterval(refresh, 60000);
         setInterval(refreshTables, 30000);
+        setInterval(refreshBookings, 600000);
         </script>
     </body>
     </html>
