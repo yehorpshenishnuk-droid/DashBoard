@@ -308,6 +308,14 @@ def fetch_bookings():
         
         for b in bookings:
             try:
+                # Фильтр по статусу - только активные брони
+                status = b.get("status", "")
+                print(f"DEBUG: Booking status: {status}, time: {b.get('dateTime', 'N/A')}", file=sys.stderr, flush=True)
+                
+                if status not in ["CREATED", "CONFIRMED", "IN_PROGRESS"]:
+                    print(f"DEBUG: Skipping booking with status: {status}", file=sys.stderr, flush=True)
+                    continue
+                
                 dt_str = b.get("dateTime")
                 if not dt_str:
                     continue
@@ -599,8 +607,8 @@ def index():
             .booking-item {
                 background: var(--bg-tertiary);
                 border-radius: 6px;
-                padding: 8px;
-                margin-bottom: 6px;
+                padding: 6px 8px;
+                margin-bottom: 4px;
                 border: 1px solid var(--border-color);
                 transition: all 0.2s ease;
             }
@@ -611,14 +619,14 @@ def index():
             }
 
             .booking-time {
-                font-size: 20px;
+                font-size: 16px;
                 font-weight: 800;
                 color: var(--accent-booking);
-                margin-bottom: 2px;
+                margin-bottom: 1px;
             }
 
             .booking-guests {
-                font-size: 14px;
+                font-size: 12px;
                 font-weight: 700;
                 color: var(--text-primary);
                 display: flex;
