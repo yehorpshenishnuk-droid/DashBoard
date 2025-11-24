@@ -38,6 +38,38 @@ def _get(url, **kwargs):
     r.raise_for_status()
     return r
 
+# ===== Довідник категорій =====
+CATEGORY_CACHE = {}
+CATEGORY_CACHE_TS = 0
+
+def load_categories():
+    global CATEGORY_CACHE, CATEGORY_CACHE_TS
+    if CATEGORY_CACHE and time.time() - CATEGORY_CACHE_TS < 3600:
+        return CATEGORY_CACHE
+    
+    url = f"https://{ACCOUNT_NAME}.joinposter.com/api/menu.getCategories?token={POSTER_TOKEN}"
+    try:
+        resp = _get(url)
+        data = resp.json().get("response", [])
+    except Exception as e:
+        print("ERROR load_categories:", e, file=sys.stderr, flush=True)
+        return {}
+    
+    mapping = {}
+    for item in data:
+        try:
+            cid = int(item.get("category_id", 0))
+            name = item.get("category_name", "").strip()
+            if cid and name:
+                mapping[cid] = name
+        except Exception:
+            continue
+    
+    CATEGORY_CACHE = mapping
+    CATEGORY_CACHE_TS = time.time()
+    print(f"DEBUG categories cached: {len(CATEGORY_CACHE)} items", file=sys.stderr, flush=True)
+    return CATEGORY_CACHE
+
 # ===== Довідник товарів =====
 def load_products():
     global PRODUCT_CACHE, PRODUCT_CACHE_TS
@@ -83,6 +115,14 @@ def load_products():
 
 # ===== Зведені продажі =====
 def fetch_category_sales(day_offset=0):
+    # Завантажуємо всі категорії
+    categories = load_categories()
+    
+    # Ініціалізуємо всі категорії нулями
+    hot = {categories[cid]: 0 for cid in HOT_CATEGORIES if cid in categories}
+    cold = {categories[cid]: 0 for cid in COLD_CATEGORIES if cid in categories}
+    bar = {categories[cid]: 0 for cid in BAR_CATEGORIES if cid in categories}
+    
     target_date = (date.today() - timedelta(days=day_offset)).strftime("%Y-%m-%d")
     url = (
         f"https://{ACCOUNT_NAME}.joinposter.com/api/dash.getCategoriesSales"
@@ -93,9 +133,9 @@ def fetch_category_sales(day_offset=0):
         rows = resp.json().get("response", [])
     except Exception as e:
         print("ERROR categories:", e, file=sys.stderr, flush=True)
-        return {"hot": {}, "cold": {}, "bar": {}}
+        return {"hot": hot, "cold": cold, "bar": bar}
 
-    hot, cold, bar = {}, {}, {}
+    # Оновлюємо реальними продажами
     for row in rows:
         try:
             cid = int(row.get("category_id", 0))
@@ -104,11 +144,11 @@ def fetch_category_sales(day_offset=0):
         except Exception:
             continue
 
-        if cid in HOT_CATEGORIES:
+        if cid in HOT_CATEGORIES and name in hot:
             hot[name] = hot.get(name, 0) + qty
-        elif cid in COLD_CATEGORIES:
+        elif cid in COLD_CATEGORIES and name in cold:
             cold[name] = cold.get(name, 0) + qty
-        elif cid in BAR_CATEGORIES:
+        elif cid in BAR_CATEGORIES and name in bar:
             bar[name] = bar.get(name, 0) + qty
 
     hot = dict(sorted(hot.items(), key=lambda x: x[0]))
