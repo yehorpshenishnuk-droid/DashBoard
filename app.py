@@ -12,7 +12,7 @@ ACCOUNT_NAME = "poka-net3"
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")
 CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")
 WEATHER_KEY = os.getenv("WEATHER_KEY", "")
-POWER_ADDRESS = os.getenv("POWER_ADDRESS", "")  # Адреса для перевірки світла
+POWER_ADDRESS = os.getenv("POWER_ADDRESS", "3.2")  # Адреса для перевірки світла
 
 # Категорії POS ID
 HOT_CATEGORIES  = {4, 13, 15, 46, 33}
