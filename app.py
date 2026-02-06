@@ -229,9 +229,8 @@ POWER_GROUP = "3.2"  # Ваша група (Софіївська Борщагі�
 
 def fetch_power_status():
     """
-    Отримує графік відключень для групи 3.1 (Софіївська Борщагівка).
-    Повертає: компактний статус для дашборду + повний графік на сьогодні.
-    Використовує нове API: https://app.yasno.ua/api/blackout-service/
+    Отримує графік відключень для групи 3.2 (Софіївська Борщагівка).
+    Використовує кілька альтернативних API для надійності.
     """
     global POWER_CACHE, POWER_CACHE_TS
     
@@ -241,49 +240,83 @@ def fetch_power_status():
     
     print(f"DEBUG: Fetching power status for group {POWER_GROUP}...", file=sys.stderr, flush=True)
     
-    try:
-        # Використовуємо нове API Yasno
-        # Київ: region_id=25, dso_id=902 (ДТЕК Київські електромережі)
-        url = "https://app.yasno.ua/api/blackout-service/public/shutdowns/regions/25/dsos/902/planned-outages"
-        
-        headers = {
-            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-            "Accept": "application/json",
-            "Accept-Language": "uk-UA,uk;q=0.9"
+    # Список API для спроби (від найкращого до запасних)
+    api_sources = [
+        {
+            "name": "Yasno Direct",
+            "url": "https://app.yasno.ua/api/blackout-service/public/shutdowns/regions/25/dsos/902/planned-outages",
+            "parser": "yasno_new"
+        },
+        {
+            "name": "Yasno via CORS Proxy",
+            "url": "https://corsproxy.io/?https://app.yasno.ua/api/blackout-service/public/shutdowns/regions/25/dsos/902/planned-outages",
+            "parser": "yasno_new"
+        },
+        {
+            "name": "Alternative API",
+            "url": "https://api.allorigins.win/raw?url=https://app.yasno.ua/api/blackout-service/public/shutdowns/regions/25/dsos/902/planned-outages",
+            "parser": "yasno_new"
         }
-        
-        resp = requests.get(url, headers=headers, timeout=15)
-        print(f"DEBUG: Yasno API status: {resp.status_code}", file=sys.stderr, flush=True)
-        
-        if resp.status_code == 200:
-            data = resp.json()
-            print(f"DEBUG: Got data for groups: {list(data.keys())[:5]}...", file=sys.stderr, flush=True)
+    ]
+    
+    for api in api_sources:
+        try:
+            print(f"DEBUG: Trying {api['name']}...", file=sys.stderr, flush=True)
             
-            # Парсимо відповідь для нашої групи
+            headers = {
+                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+                "Accept": "application/json",
+                "Accept-Language": "uk-UA,uk;q=0.9"
+            }
+            
+            # Збільшуємо таймаут для free tier
+            resp = requests.get(api["url"], headers=headers, timeout=20)
+            print(f"DEBUG: {api['name']} status: {resp.status_code}", file=sys.stderr, flush=True)
+            
+            if resp.status_code != 200:
+                print(f"DEBUG: Skipping {api['name']}, status {resp.status_code}", file=sys.stderr, flush=True)
+                continue
+            
+            data = resp.json()
+            
+            # Парсимо відповідь
             result = parse_yasno_new_api(data, POWER_GROUP)
             if result:
                 POWER_CACHE = result
                 POWER_CACHE_TS = time.time()
-                print(f"DEBUG: Successfully got schedule: {POWER_CACHE}", file=sys.stderr, flush=True)
+                print(f"DEBUG: ✅ Success with {api['name']}: {POWER_CACHE}", file=sys.stderr, flush=True)
                 return POWER_CACHE
-        else:
-            print(f"WARNING: API returned status {resp.status_code}", file=sys.stderr, flush=True)
-            
-    except Exception as e:
-        print(f"ERROR power_status: {e}", file=sys.stderr, flush=True)
-        import traceback
-        traceback.print_exc(file=sys.stderr)
+            else:
+                print(f"DEBUG: Parser returned None for {api['name']}", file=sys.stderr, flush=True)
+                
+        except requests.exceptions.Timeout:
+            print(f"WARNING: {api['name']} timeout", file=sys.stderr, flush=True)
+            continue
+        except requests.exceptions.ConnectionError as e:
+            print(f"WARNING: {api['name']} connection error: {e}", file=sys.stderr, flush=True)
+            continue
+        except Exception as e:
+            print(f"ERROR {api['name']}: {e}", file=sys.stderr, flush=True)
+            import traceback
+            traceback.print_exc(file=sys.stderr)
+            continue
     
-    # Якщо API не працює - залишаємо попередній кеш або дефолтний статус
-    if not POWER_CACHE.get("status") or POWER_CACHE.get("status") == "—":
-        POWER_CACHE = {
-            "status": "Дані недоступні",
-            "next": "Перевірте yasno.com.ua",
-            "has_power": None,
-            "icon": "❓",
-            "schedule": [],
-            "schedule_text": "Дані тимчасово недоступні"
-        }
+    print(f"WARNING: All API sources failed", file=sys.stderr, flush=True)
+    
+    # Якщо всі API не працюють, але у нас є старий кеш - використовуємо його
+    if POWER_CACHE and POWER_CACHE.get("status") and POWER_CACHE.get("status") != "—":
+        print(f"DEBUG: Using cached data (age: {int(time.time() - POWER_CACHE_TS)}s)", file=sys.stderr, flush=True)
+        return POWER_CACHE
+    
+    # Якщо немає жодних даних
+    POWER_CACHE = {
+        "status": "Дані недоступні",
+        "next": "Перевірте yasno.com.ua",
+        "has_power": None,
+        "icon": "❓",
+        "schedule": [],
+        "schedule_text": "API тимчасово недоступне"
+    }
     
     return POWER_CACHE
 
