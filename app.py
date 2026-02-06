@@ -224,7 +224,7 @@ def fetch_weather():
 # ===== Відключення світла =====
 POWER_CACHE = {"status": "—", "next": "", "has_power": None, "icon": "❓", "schedule": []}
 POWER_CACHE_TS = 0
-POWER_GROUP = "3.1"  # Ваша група (Софіївська Борщагівка, вул. Миру 36)
+POWER_GROUP = "3.2"  # Ваша група (Софіївська Борщагівка, вул. Миру 36)
 # Для Києва: region_id=25, dso_id=902
 
 def fetch_power_status():
