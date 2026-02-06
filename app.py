@@ -224,88 +224,221 @@ def fetch_weather():
 # ===== Відключення світла =====
 POWER_CACHE = {"status": "—", "next": "", "has_power": None, "icon": "❓", "schedule": []}
 POWER_CACHE_TS = 0
-POWER_GROUP = "3.2"  # Ваша група (Софіївська Борщагівка, вул. Миру 36)
+POWER_GROUP = "3.1"  # Ваша група (Софіївська Борщагівка, вул. Миру 36)
+# Для Києва: region_id=25, dso_id=902
 
 def fetch_power_status():
     """
-    Отримує графік відключень для групи 3.2 (Софіївська Борщагівка).
+    Отримує графік відключень для групи 3.1 (Софіївська Борщагівка).
     Повертає: компактний статус для дашборду + повний графік на сьогодні.
+    Використовує нове API: https://app.yasno.ua/api/blackout-service/
     """
     global POWER_CACHE, POWER_CACHE_TS
     
     # Кеш на 5 хвилин
     if time.time() - POWER_CACHE_TS < 300:
-        print(f"DEBUG: Using cached power status", file=sys.stderr, flush=True)
         return POWER_CACHE
     
     print(f"DEBUG: Fetching power status for group {POWER_GROUP}...", file=sys.stderr, flush=True)
     
-    # Тимчасово для тестування - повертаємо статичні дані
-    # Це можна використати, поки API не працюють
-    now = datetime.now()
-    current_hour = now.hour
-    
-    # Приклад графіка: відключення з 08:00-12:00 та 20:00-23:00
-    outages = [
-        {"start": "08:00", "end": "12:00"},
-        {"start": "20:00", "end": "23:00"}
-    ]
-    
-    # Перевіряємо поточний статус
-    in_outage = False
-    next_outage = None
-    current_end = None
-    
-    for outage in outages:
-        start_hour = int(outage["start"].split(":")[0])
-        end_hour = int(outage["end"].split(":")[0])
+    try:
+        # Використовуємо нове API Yasno
+        # Київ: region_id=25, dso_id=902 (ДТЕК Київські електромережі)
+        url = "https://app.yasno.ua/api/blackout-service/public/shutdowns/regions/25/dsos/902/planned-outages"
         
-        if start_hour <= current_hour < end_hour:
-            in_outage = True
-            current_end = outage["end"]
-            break
-        elif current_hour < start_hour:
-            if next_outage is None:
-                next_outage = outage["start"]
-            break
-    
-    schedule_text = ", ".join([f"{o['start']}-{o['end']}" for o in outages])
-    
-    if in_outage:
-        result = {
-            "status": "Світла немає",
-            "next": f"Світло буде в {current_end}",
-            "has_power": False,
-            "icon": "🔴",
-            "schedule": outages,
-            "schedule_text": schedule_text
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json",
+            "Accept-Language": "uk-UA,uk;q=0.9"
         }
-    elif next_outage:
-        result = {
-            "status": "Світло є",
-            "next": f"Світла не буде з {next_outage}",
-            "has_power": True,
-            "icon": "🟢",
-            "schedule": outages,
-            "schedule_text": schedule_text
-        }
-    else:
-        result = {
-            "status": "Світло є",
-            "next": "Відключень немає до кінця дня",
-            "has_power": True,
-            "icon": "🟢",
-            "schedule": outages,
-            "schedule_text": schedule_text
-        }
+        
+        resp = requests.get(url, headers=headers, timeout=15)
+        print(f"DEBUG: Yasno API status: {resp.status_code}", file=sys.stderr, flush=True)
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            print(f"DEBUG: Got data for groups: {list(data.keys())[:5]}...", file=sys.stderr, flush=True)
+            
+            # Парсимо відповідь для нашої групи
+            result = parse_yasno_new_api(data, POWER_GROUP)
+            if result:
+                POWER_CACHE = result
+                POWER_CACHE_TS = time.time()
+                print(f"DEBUG: Successfully got schedule: {POWER_CACHE}", file=sys.stderr, flush=True)
+                return POWER_CACHE
+        else:
+            print(f"WARNING: API returned status {resp.status_code}", file=sys.stderr, flush=True)
+            
+    except Exception as e:
+        print(f"ERROR power_status: {e}", file=sys.stderr, flush=True)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
     
-    POWER_CACHE = result
-    POWER_CACHE_TS = time.time()
-    print(f"DEBUG: Power status: {result}", file=sys.stderr, flush=True)
+    # Якщо API не працює - залишаємо попередній кеш або дефолтний статус
+    if not POWER_CACHE.get("status") or POWER_CACHE.get("status") == "—":
+        POWER_CACHE = {
+            "status": "Дані недоступні",
+            "next": "Перевірте yasno.com.ua",
+            "has_power": None,
+            "icon": "❓",
+            "schedule": [],
+            "schedule_text": "Дані тимчасово недоступні"
+        }
     
     return POWER_CACHE
 
-def parse_power_schedule(data, parser_type="yasno_v1"):
+def parse_yasno_new_api(data, group="3.1"):
+    """
+    Парсить нове API Yasno (app.yasno.ua/api/blackout-service/)
+    
+    Формат: {
+        "3.1": {
+            "today": {
+                "slots": [
+                    {"start": 0, "end": 300, "type": "NotPlanned"},  # Хвилини від початку дня
+                    {"start": 300, "end": 600, "type": "Definite"},  # Відключення 05:00-10:00
+                    ...
+                ],
+                "date": "2026-02-06T00:00:00+02:00",
+                "status": "ScheduleApplies"
+            }
+        }
+    }
+    """
+    now = datetime.now()
+    current_outage_end = None
+    next_outage_start = None
+    today_schedule = []
+    
+    try:
+        if group not in data:
+            print(f"DEBUG: Group {group} not found in API response", file=sys.stderr, flush=True)
+            # Спробуємо альтернативні формати групи
+            for alt_group in [f"{group[0]}.{group[2]}", group.replace(".", "")]:
+                if alt_group in data:
+                    print(f"DEBUG: Found alternative group key: {alt_group}", file=sys.stderr, flush=True)
+                    group = alt_group
+                    break
+            else:
+                return None
+        
+        group_data = data[group]
+        today_data = group_data.get("today", {})
+        
+        if not today_data or today_data.get("status") != "ScheduleApplies":
+            print(f"DEBUG: No schedule applies for today", file=sys.stderr, flush=True)
+            return {
+                "status": "Є світло",
+                "next": "Графік на сьогодні відсутній",
+                "has_power": True,
+                "icon": "🟢",
+                "schedule": [],
+                "schedule_text": "Графіків відключень немає"
+            }
+        
+        slots = today_data.get("slots", [])
+        print(f"DEBUG: Found {len(slots)} time slots", file=sys.stderr, flush=True)
+        
+        # Поточний час у хвилинах від початку дня
+        current_minutes = now.hour * 60 + now.minute
+        
+        for slot in slots:
+            start_min = slot.get("start", 0)
+            end_min = slot.get("end", 0)
+            slot_type = slot.get("type", "")
+            
+            # Тільки відключення (Definite)
+            if slot_type != "Definite":
+                continue
+            
+            # Конвертуємо хвилини в час
+            start_hour = start_min // 60
+            start_minute = start_min % 60
+            end_hour = end_min // 60
+            end_minute = end_min % 60
+            
+            start_time = f"{start_hour:02d}:{start_minute:02d}"
+            end_time = f"{end_hour:02d}:{end_minute:02d}"
+            
+            # Додаємо в графік
+            today_schedule.append({
+                "start": start_time,
+                "end": end_time
+            })
+            
+            # Перевіряємо поточний статус
+            if start_min <= current_minutes < end_min:
+                # Зараз відключення
+                current_outage_end = now.replace(
+                    hour=end_hour, 
+                    minute=end_minute, 
+                    second=0, 
+                    microsecond=0
+                )
+                if end_min > 1440:  # Перехід на наступний день
+                    current_outage_end += timedelta(days=1)
+                    
+            elif current_minutes < start_min:
+                # Майбутнє відключення
+                future_start = now.replace(
+                    hour=start_hour,
+                    minute=start_minute,
+                    second=0,
+                    microsecond=0
+                )
+                if next_outage_start is None or future_start < next_outage_start:
+                    next_outage_start = future_start
+        
+        # Формуємо текст графіку
+        schedule_text = ", ".join([f"{s['start']}-{s['end']}" for s in today_schedule]) if today_schedule else "Немає відключень"
+        
+        if current_outage_end:
+            # Зараз немає світла
+            return {
+                "status": "Немає світла",
+                "next": f"Включать о {current_outage_end.strftime('%H:%M')}",
+                "has_power": False,
+                "icon": "🔴",
+                "schedule": today_schedule,
+                "schedule_text": schedule_text
+            }
+        elif next_outage_start:
+            # Зараз є світло
+            delta = next_outage_start - now
+            hours = int(delta.total_seconds() // 3600)
+            mins = int((delta.total_seconds() % 3600) // 60)
+            
+            if hours > 0:
+                time_str = f"через {hours}г {mins}хв"
+            else:
+                time_str = f"через {mins}хв"
+            
+            return {
+                "status": "Є світло",
+                "next": f"Відключать {time_str}",
+                "has_power": True,
+                "icon": "🟢",
+                "schedule": today_schedule,
+                "schedule_text": schedule_text
+            }
+        else:
+            # Немає відключень на сьогодні
+            return {
+                "status": "Є світло",
+                "next": "Відключень немає",
+                "has_power": True,
+                "icon": "🟢",
+                "schedule": [],
+                "schedule_text": "Графіків відключень немає"
+            }
+            
+    except Exception as e:
+        print(f"ERROR parse_yasno_new_api: {e}", file=sys.stderr, flush=True)
+        import traceback
+        traceback.print_exc(file=sys.stderr)
+        return None
+
+def parse_yasno_schedule(data, parser_type="yasno_v1"):
     """
     Парсить відповідь від Yasno API та формує компактний статус + графік
     """
@@ -393,8 +526,8 @@ def parse_power_schedule(data, parser_type="yasno_v1"):
         if current_outage_end:
             # Зараз немає світла
             return {
-                "status": "Світла немає",
-                "next": f"Світло буде в {current_outage_end.strftime('%H:%M')}",
+                "status": "Немає світла",
+                "next": f"Включать о {current_outage_end.strftime('%H:%M')}",
                 "has_power": False,
                 "icon": "🔴",
                 "schedule": today_schedule,
@@ -412,8 +545,8 @@ def parse_power_schedule(data, parser_type="yasno_v1"):
                 time_str = f"через {mins}хв"
             
             return {
-                "status": "Світло є",
-                "next": f"Світла не буде з {next_outage_start.strftime('%H:%M')}",
+                "status": "Є світло",
+                "next": f"Відключать {time_str}",
                 "has_power": True,
                 "icon": "🟢",
                 "schedule": today_schedule,
@@ -422,7 +555,7 @@ def parse_power_schedule(data, parser_type="yasno_v1"):
         else:
             # Немає даних про відключення
             return {
-                "status": "Світло є",
+                "status": "Є світло",
                 "next": "Графік невідомий",
                 "has_power": True,
                 "icon": "🟢",
@@ -431,7 +564,7 @@ def parse_power_schedule(data, parser_type="yasno_v1"):
             }
             
     except Exception as e:
-        print(f"ERROR parse_power_schedule: {e}", file=sys.stderr, flush=True)
+        print(f"ERROR parse_yasno_schedule: {e}", file=sys.stderr, flush=True)
         import traceback
         traceback.print_exc(file=sys.stderr)
         return None
