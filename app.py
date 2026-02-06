@@ -12,6 +12,7 @@ ACCOUNT_NAME = "poka-net3"
 POSTER_TOKEN = os.getenv("POSTER_TOKEN")
 CHOICE_TOKEN = os.getenv("CHOICE_TOKEN")
 WEATHER_KEY = os.getenv("WEATHER_KEY", "")
+POWER_ADDRESS = os.getenv("POWER_ADDRESS", "")  # Адреса для перевірки світла
 
 # Категорії POS ID
 HOT_CATEGORIES  = {4, 13, 15, 46, 33}
@@ -220,6 +221,131 @@ def fetch_weather():
         print("ERROR weather:", e, file=sys.stderr, flush=True)
         return {"temp": "Н/Д", "desc": "Н/Д", "icon": ""}
 
+# ===== Відключення світла =====
+POWER_CACHE = {"status": "—", "next": "", "has_power": None, "icon": "❓"}
+POWER_CACHE_TS = 0
+POWER_GROUP = "3.2"  # Ваша група (Софіївська Борщагівка, вул. Миру 36)
+
+def fetch_power_status():
+    """
+    Отримує графік відключень для групи 3.2 (Софіївська Борщагівка).
+    Повертає: компактний статус для дашборду.
+    """
+    global POWER_CACHE, POWER_CACHE_TS
+    
+    # Кеш на 5 хвилин
+    if time.time() - POWER_CACHE_TS < 300:
+        return POWER_CACHE
+    
+    try:
+        # API Yasno для Київської області
+        url = "https://app.yasno.ua/api/v1/pages/home/schedule-turn-off-electricity"
+        headers = {
+            "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
+            "Accept": "application/json"
+        }
+        
+        resp = requests.get(url, headers=headers, timeout=10)
+        
+        if resp.status_code == 200:
+            data = resp.json()
+            now = datetime.now()
+            
+            # Шукаємо графік для групи 3.2
+            current_outage_end = None
+            next_outage_start = None
+            
+            # Перевіряємо структуру даних
+            if isinstance(data, dict):
+                schedules = data.get("components", [])
+                for component in schedules:
+                    if component.get("template_name") == "electricity-outages-daily-schedule":
+                        groups = component.get("schedule", {})
+                        
+                        # Шукаємо групу 3.2
+                        group_schedule = groups.get(POWER_GROUP, [])
+                        
+                        for period in group_schedule:
+                            try:
+                                start_str = period.get("start")
+                                end_str = period.get("end")
+                                
+                                if not start_str or not end_str:
+                                    continue
+                                
+                                # Парсимо час
+                                start_dt = datetime.fromisoformat(start_str.replace('Z', ''))
+                                end_dt = datetime.fromisoformat(end_str.replace('Z', ''))
+                                
+                                # Зараз відключення?
+                                if start_dt <= now <= end_dt:
+                                    current_outage_end = end_dt
+                                    break
+                                # Майбутнє відключення?
+                                elif now < start_dt:
+                                    if next_outage_start is None or start_dt < next_outage_start:
+                                        next_outage_start = start_dt
+                            except Exception as e:
+                                print(f"ERROR parsing period: {e}", file=sys.stderr, flush=True)
+                                continue
+            
+            # Формуємо компактний статус
+            if current_outage_end:
+                # Зараз немає світла
+                delta = current_outage_end - now
+                hours = int(delta.total_seconds() // 3600)
+                mins = int((delta.total_seconds() % 3600) // 60)
+                
+                POWER_CACHE = {
+                    "status": "Немає світла",
+                    "next": f"Включать о {current_outage_end.strftime('%H:%M')}",
+                    "has_power": False,
+                    "icon": "🔴"
+                }
+            elif next_outage_start:
+                # Зараз є світло
+                delta = next_outage_start - now
+                hours = int(delta.total_seconds() // 3600)
+                mins = int((delta.total_seconds() % 3600) // 60)
+                
+                if hours > 0:
+                    time_str = f"через {hours}г {mins}хв"
+                else:
+                    time_str = f"через {mins}хв"
+                
+                POWER_CACHE = {
+                    "status": "Є світло",
+                    "next": f"Відключать {time_str}",
+                    "has_power": True,
+                    "icon": "🟢"
+                }
+            else:
+                # Немає даних про відключення
+                POWER_CACHE = {
+                    "status": "Є світло",
+                    "next": "Графік невідомий",
+                    "has_power": True,
+                    "icon": "🟢"
+                }
+            
+            POWER_CACHE_TS = time.time()
+            print(f"DEBUG: Power status updated for group {POWER_GROUP}: {POWER_CACHE}", file=sys.stderr, flush=True)
+            return POWER_CACHE
+            
+    except Exception as e:
+        print(f"ERROR power_status: {e}", file=sys.stderr, flush=True)
+    
+    # Якщо API не працює - залишаємо попередній кеш або дефолтний статус
+    if not POWER_CACHE.get("status") or POWER_CACHE.get("status") == "—":
+        POWER_CACHE = {
+            "status": "Дані недоступні",
+            "next": "",
+            "has_power": None,
+            "icon": "❓"
+        }
+    
+    return POWER_CACHE
+
 # ===== Столи =====
 HALL_TABLES = [1,2,3,4,5,6,8]
 TERRACE_TABLES = [7,10,11,12,13]
@@ -406,6 +532,10 @@ def api_bookings():
         BOOKINGS_CACHE_TS = time.time()
     return jsonify(BOOKINGS_CACHE)
 
+@app.route("/api/power")
+def api_power():
+    return jsonify(fetch_power_status())
+
 # ===== UI =====
 @app.route("/")
 def index():
@@ -557,6 +687,50 @@ def index():
             .weather img { width: 80px; height: 80px; margin: 0; }
             .temp { font-size: 30px; font-weight: 800; color: var(--text-primary); line-height: 1; }
             .desc { font-size: 13px; color: var(--text-secondary); text-align: center; font-weight: 600; }
+
+            .power-status {
+                margin-top: 8px;
+                padding: 8px 12px;
+                background: var(--bg-tertiary);
+                border-radius: 8px;
+                border: 1px solid var(--border-color);
+                display: flex;
+                align-items: center;
+                gap: 8px;
+                font-size: 11px;
+                transition: all 0.3s ease;
+            }
+
+            .power-status .icon {
+                font-size: 16px;
+                line-height: 1;
+            }
+
+            .power-status .text {
+                flex: 1;
+                text-align: left;
+            }
+
+            .power-status .status {
+                font-weight: 700;
+                color: var(--text-primary);
+            }
+
+            .power-status .next {
+                font-weight: 500;
+                color: var(--text-secondary);
+                font-size: 10px;
+            }
+
+            .power-status.has-power {
+                background: linear-gradient(135deg, rgba(52, 199, 89, 0.1), rgba(48, 209, 88, 0.05));
+                border-color: rgba(52, 199, 89, 0.3);
+            }
+
+            .power-status.no-power {
+                background: linear-gradient(135deg, rgba(255, 59, 48, 0.1), rgba(255, 69, 58, 0.05));
+                border-color: rgba(255, 59, 48, 0.3);
+            }
 
             .chart-card {
                 grid-column: 1 / 4;
@@ -806,6 +980,13 @@ def index():
                         <div id="weather-icon"></div>
                         <div id="weather-temp" class="temp"></div>
                         <div id="weather-desc" class="desc"></div>
+                    </div>
+                    <div id="power-status" class="power-status">
+                        <span class="icon">❓</span>
+                        <div class="text">
+                            <div class="status">Завантаження...</div>
+                            <div class="next"></div>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -1100,6 +1281,35 @@ def index():
             descEl.textContent = w.desc || '—';
         }
 
+        async function refreshPower(){
+            try {
+                const r = await fetch('/api/power');
+                const data = await r.json();
+                
+                const statusEl = document.getElementById('power-status');
+                const iconEl = statusEl.querySelector('.icon');
+                const statusText = statusEl.querySelector('.status');
+                const nextText = statusEl.querySelector('.next');
+                
+                // Оновлюємо іконку
+                iconEl.textContent = data.icon || '❓';
+                
+                // Оновлюємо текст
+                statusText.textContent = data.status || 'Н/Д';
+                nextText.textContent = data.next || '';
+                
+                // Оновлюємо стилі
+                statusEl.classList.remove('has-power', 'no-power');
+                if (data.has_power === true) {
+                    statusEl.classList.add('has-power');
+                } else if (data.has_power === false) {
+                    statusEl.classList.add('no-power');
+                }
+            } catch (e) {
+                console.error('Power status error:', e);
+            }
+        }
+
         async function refreshTables(){
             const r = await fetch('/api/tables');
             const data = await r.json();
@@ -1116,10 +1326,12 @@ def index():
         refresh(); 
         refreshTables();
         refreshBookings();
+        refreshPower();
 
         setInterval(refresh, 60000);
         setInterval(refreshTables, 30000);
         setInterval(refreshBookings, 600000);
+        setInterval(refreshPower, 300000); // Кожні 5 хвилин
         </script>
     </body>
     </html>

@@ -11,3 +11,5 @@ services:
         sync: false
       - key: WEATHER_KEY
         sync: false
+      - key: POWER_ADDRESS
+        sync: false
