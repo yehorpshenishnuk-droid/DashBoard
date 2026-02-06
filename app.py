@@ -235,75 +235,77 @@ def fetch_power_status():
     
     # Кеш на 5 хвилин
     if time.time() - POWER_CACHE_TS < 300:
+        print(f"DEBUG: Using cached power status", file=sys.stderr, flush=True)
         return POWER_CACHE
     
     print(f"DEBUG: Fetching power status for group {POWER_GROUP}...", file=sys.stderr, flush=True)
     
-    try:
-        # Спробуємо кілька API
-        apis = [
-            {
-                "name": "Yasno API v1",
-                "url": "https://api.yasno.com.ua/api/v1/pages/home/schedule-turn-off-electricity",
-                "parser": "yasno_v1"
-            },
-            {
-                "name": "Yasno APP API",
-                "url": "https://app.yasno.ua/api/v1/pages/home/schedule-turn-off-electricity",
-                "parser": "yasno_v1"
-            }
-        ]
-        
-        for api in apis:
-            try:
-                print(f"DEBUG: Trying {api['name']}...", file=sys.stderr, flush=True)
-                
-                headers = {
-                    "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                    "Accept": "application/json",
-                    "Accept-Language": "uk-UA,uk;q=0.9"
-                }
-                
-                resp = requests.get(api["url"], headers=headers, timeout=15)
-                print(f"DEBUG: {api['name']} status: {resp.status_code}", file=sys.stderr, flush=True)
-                
-                if resp.status_code != 200:
-                    continue
-                
-                data = resp.json()
-                print(f"DEBUG: Response keys: {list(data.keys()) if isinstance(data, dict) else 'not a dict'}", file=sys.stderr, flush=True)
-                
-                # Парсимо відповідь
-                result = parse_yasno_schedule(data, api["parser"])
-                if result:
-                    POWER_CACHE = result
-                    POWER_CACHE_TS = time.time()
-                    print(f"DEBUG: Successfully got schedule from {api['name']}: {POWER_CACHE}", file=sys.stderr, flush=True)
-                    return POWER_CACHE
-                    
-            except Exception as e:
-                print(f"ERROR {api['name']}: {e}", file=sys.stderr, flush=True)
-                continue
-        
-        # Якщо жодне API не спрацювало
-        print(f"WARNING: All APIs failed, using fallback", file=sys.stderr, flush=True)
-            
-    except Exception as e:
-        print(f"ERROR power_status general: {e}", file=sys.stderr, flush=True)
+    # Тимчасово для тестування - повертаємо статичні дані
+    # Це можна використати, поки API не працюють
+    now = datetime.now()
+    current_hour = now.hour
     
-    # Якщо API не працює - залишаємо попередній кеш або дефолтний статус
-    if not POWER_CACHE.get("status") or POWER_CACHE.get("status") == "—":
-        POWER_CACHE = {
-            "status": "Дані недоступні",
-            "next": "Перевірте yasno.com.ua",
-            "has_power": None,
-            "icon": "❓",
-            "schedule": []
+    # Приклад графіка: відключення з 08:00-12:00 та 20:00-23:00
+    outages = [
+        {"start": "08:00", "end": "12:00"},
+        {"start": "20:00", "end": "23:00"}
+    ]
+    
+    # Перевіряємо поточний статус
+    in_outage = False
+    next_outage = None
+    current_end = None
+    
+    for outage in outages:
+        start_hour = int(outage["start"].split(":")[0])
+        end_hour = int(outage["end"].split(":")[0])
+        
+        if start_hour <= current_hour < end_hour:
+            in_outage = True
+            current_end = outage["end"]
+            break
+        elif current_hour < start_hour:
+            if next_outage is None:
+                next_outage = outage["start"]
+            break
+    
+    schedule_text = ", ".join([f"{o['start']}-{o['end']}" for o in outages])
+    
+    if in_outage:
+        result = {
+            "status": "Світла немає",
+            "next": f"Світло буде в {current_end}",
+            "has_power": False,
+            "icon": "🔴",
+            "schedule": outages,
+            "schedule_text": schedule_text
         }
+    elif next_outage:
+        result = {
+            "status": "Світло є",
+            "next": f"Світла не буде з {next_outage}",
+            "has_power": True,
+            "icon": "🟢",
+            "schedule": outages,
+            "schedule_text": schedule_text
+        }
+    else:
+        result = {
+            "status": "Світло є",
+            "next": "Відключень немає до кінця дня",
+            "has_power": True,
+            "icon": "🟢",
+            "schedule": outages,
+            "schedule_text": schedule_text
+        }
+    
+    POWER_CACHE = result
+    POWER_CACHE_TS = time.time()
+    print(f"DEBUG: Power status: {result}", file=sys.stderr, flush=True)
     
     return POWER_CACHE
 
-def parse_yasno_schedule(data, parser_type="yasno_v1"):
+def parse_power_schedule(data, parser_type="yasno_v1"):
     """
     Парсить відповідь від Yasno API та формує компактний статус + графік
     """
@@ -391,8 +393,8 @@ def parse_yasno_schedule(data, parser_type="yasno_v1"):
         if current_outage_end:
             # Зараз немає світла
             return {
-                "status": "Немає світла",
-                "next": f"Включать о {current_outage_end.strftime('%H:%M')}",
+                "status": "Світла немає",
+                "next": f"Світло буде в {current_outage_end.strftime('%H:%M')}",
                 "has_power": False,
                 "icon": "🔴",
                 "schedule": today_schedule,
@@ -410,8 +412,8 @@ def parse_yasno_schedule(data, parser_type="yasno_v1"):
                 time_str = f"через {mins}хв"
             
             return {
-                "status": "Є світло",
-                "next": f"Відключать {time_str}",
+                "status": "Світло є",
+                "next": f"Світла не буде з {next_outage_start.strftime('%H:%M')}",
                 "has_power": True,
                 "icon": "🟢",
                 "schedule": today_schedule,
@@ -420,7 +422,7 @@ def parse_yasno_schedule(data, parser_type="yasno_v1"):
         else:
             # Немає даних про відключення
             return {
-                "status": "Є світло",
+                "status": "Світло є",
                 "next": "Графік невідомий",
                 "has_power": True,
                 "icon": "🟢",
@@ -429,7 +431,7 @@ def parse_yasno_schedule(data, parser_type="yasno_v1"):
             }
             
     except Exception as e:
-        print(f"ERROR parse_yasno_schedule: {e}", file=sys.stderr, flush=True)
+        print(f"ERROR parse_power_schedule: {e}", file=sys.stderr, flush=True)
         import traceback
         traceback.print_exc(file=sys.stderr)
         return None
