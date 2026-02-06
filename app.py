@@ -228,380 +228,52 @@ POWER_GROUP = "3.2"  # Ваша група (Софіївська Борщагі�
 # Для Києва: region_id=25, dso_id=902
 
 def fetch_power_status():
-    """
-    Отримує графік відключень для групи 3.2 (Софіївська Борщагівка).
-    Використовує кілька альтернативних API для надійності.
-    """
-    global POWER_CACHE, POWER_CACHE_TS
+    def get_power_status():
+    """Парсинг графіку з API Yasno v2 (аналогічно інтеграції HA)"""
+    group_name = os.getenv("POWER_ADDRESS", "3.2")
+    url = "https://api.yasno.com.ua/api/v1/pages/home/schedule-turn-off-electricity"
     
-    # Кеш на 5 хвилин
-    if time.time() - POWER_CACHE_TS < 300:
-        return POWER_CACHE
-    
-    print(f"DEBUG: Fetching power status for group {POWER_GROUP}...", file=sys.stderr, flush=True)
-    
-    # Список API для спроби (від найкращого до запасних)
-    api_sources = [
-        {
-            "name": "Yasno Direct",
-            "url": "https://app.yasno.ua/api/blackout-service/public/shutdowns/regions/25/dsos/902/planned-outages",
-            "parser": "yasno_new"
-        },
-        {
-            "name": "Yasno via CORS Proxy",
-            "url": "https://corsproxy.io/?https://app.yasno.ua/api/blackout-service/public/shutdowns/regions/25/dsos/902/planned-outages",
-            "parser": "yasno_new"
-        },
-        {
-            "name": "Alternative API",
-            "url": "https://api.allorigins.win/raw?url=https://app.yasno.ua/api/blackout-service/public/shutdowns/regions/25/dsos/902/planned-outages",
-            "parser": "yasno_new"
-        }
-    ]
-    
-    for api in api_sources:
-        try:
-            print(f"DEBUG: Trying {api['name']}...", file=sys.stderr, flush=True)
-            
-            headers = {
-                "User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36",
-                "Accept": "application/json",
-                "Accept-Language": "uk-UA,uk;q=0.9"
-            }
-            
-            # Збільшуємо таймаут для free tier
-            resp = requests.get(api["url"], headers=headers, timeout=20)
-            print(f"DEBUG: {api['name']} status: {resp.status_code}", file=sys.stderr, flush=True)
-            
-            if resp.status_code != 200:
-                print(f"DEBUG: Skipping {api['name']}, status {resp.status_code}", file=sys.stderr, flush=True)
-                continue
-            
-            data = resp.json()
-            
-            # Парсимо відповідь
-            result = parse_yasno_new_api(data, POWER_GROUP)
-            if result:
-                POWER_CACHE = result
-                POWER_CACHE_TS = time.time()
-                print(f"DEBUG: ✅ Success with {api['name']}: {POWER_CACHE}", file=sys.stderr, flush=True)
-                return POWER_CACHE
-            else:
-                print(f"DEBUG: Parser returned None for {api['name']}", file=sys.stderr, flush=True)
-                
-        except requests.exceptions.Timeout:
-            print(f"WARNING: {api['name']} timeout", file=sys.stderr, flush=True)
-            continue
-        except requests.exceptions.ConnectionError as e:
-            print(f"WARNING: {api['name']} connection error: {e}", file=sys.stderr, flush=True)
-            continue
-        except Exception as e:
-            print(f"ERROR {api['name']}: {e}", file=sys.stderr, flush=True)
-            import traceback
-            traceback.print_exc(file=sys.stderr)
-            continue
-    
-    print(f"WARNING: All API sources failed", file=sys.stderr, flush=True)
-    
-    # Якщо всі API не працюють, але у нас є старий кеш - використовуємо його
-    if POWER_CACHE and POWER_CACHE.get("status") and POWER_CACHE.get("status") != "—":
-        print(f"DEBUG: Using cached data (age: {int(time.time() - POWER_CACHE_TS)}s)", file=sys.stderr, flush=True)
-        return POWER_CACHE
-    
-    # Якщо немає жодних даних
-    POWER_CACHE = {
-        "status": "Дані недоступні",
-        "next": "Перевірте yasno.com.ua",
-        "has_power": None,
-        "icon": "❓",
-        "schedule": [],
-        "schedule_text": "API тимчасово недоступне"
+    headers = {
+        'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
     }
-    
-    return POWER_CACHE
 
-def parse_yasno_new_api(data, group="3.1"):
-    """
-    Парсить нове API Yasno (app.yasno.ua/api/blackout-service/)
-    
-    Формат: {
-        "3.1": {
-            "today": {
-                "slots": [
-                    {"start": 0, "end": 300, "type": "NotPlanned"},  # Хвилини від початку дня
-                    {"start": 300, "end": 600, "type": "Definite"},  # Відключення 05:00-10:00
-                    ...
-                ],
-                "date": "2026-02-06T00:00:00+02:00",
-                "status": "ScheduleApplies"
-            }
-        }
-    }
-    """
-    now = datetime.now()
-    current_outage_end = None
-    next_outage_start = None
-    today_schedule = []
-    
     try:
-        if group not in data:
-            print(f"DEBUG: Group {group} not found in API response", file=sys.stderr, flush=True)
-            # Спробуємо альтернативні формати групи
-            for alt_group in [f"{group[0]}.{group[2]}", group.replace(".", "")]:
-                if alt_group in data:
-                    print(f"DEBUG: Found alternative group key: {alt_group}", file=sys.stderr, flush=True)
-                    group = alt_group
-                    break
-            else:
-                return None
+        res = requests.get(url, headers=headers, timeout=10)
+        if res.status_code != 200:
+            return None
+            
+        data = res.json()
+        components = data.get('components', [])
         
-        group_data = data[group]
-        today_data = group_data.get("today", {})
+        # Шукаємо компонент з графіками
+        schedule_component = next((c for c in components if c.get('template_name') == 'electricity-outages-daily-schedule'), None)
+        if not schedule_component:
+            return None
+
+        # Оскільки Софіївська Борщагівка — це область, беремо dtek-krem
+        # Якщо дані будуть пусті, код перевірить dtek-kem (місто)
+        region_data = schedule_component.get('schedule', {}).get('dtek-krem', {})
+        if not region_data:
+            region_data = schedule_component.get('schedule', {}).get('dtek-kem', {})
+
+        # Шукаємо саме твою групу (наприклад, 3.2)
+        group_data = region_data.get(group_name)
         
-        if not today_data or today_data.get("status") != "ScheduleApplies":
-            print(f"DEBUG: No schedule applies for today", file=sys.stderr, flush=True)
+        # Якщо 3.2 немає, спробуємо знайти "батьківську" 3.1
+        if not group_data and "." in group_name:
+            parent_group = group_name.split(".")[0] + ".1"
+            group_data = region_data.get(parent_group)
+
+        if group_data:
             return {
-                "status": "Є світло",
-                "next": "Графік на сьогодні відсутній",
-                "has_power": True,
-                "icon": "🟢",
-                "schedule": [],
-                "schedule_text": "Графіків відключень немає"
-            }
-        
-        slots = today_data.get("slots", [])
-        print(f"DEBUG: Found {len(slots)} time slots", file=sys.stderr, flush=True)
-        
-        # Поточний час у хвилинах від початку дня
-        current_minutes = now.hour * 60 + now.minute
-        
-        for slot in slots:
-            start_min = slot.get("start", 0)
-            end_min = slot.get("end", 0)
-            slot_type = slot.get("type", "")
-            
-            # Тільки відключення (Definite)
-            if slot_type != "Definite":
-                continue
-            
-            # Конвертуємо хвилини в час
-            start_hour = start_min // 60
-            start_minute = start_min % 60
-            end_hour = end_min // 60
-            end_minute = end_min % 60
-            
-            start_time = f"{start_hour:02d}:{start_minute:02d}"
-            end_time = f"{end_hour:02d}:{end_minute:02d}"
-            
-            # Додаємо в графік
-            today_schedule.append({
-                "start": start_time,
-                "end": end_time
-            })
-            
-            # Перевіряємо поточний статус
-            if start_min <= current_minutes < end_min:
-                # Зараз відключення
-                current_outage_end = now.replace(
-                    hour=end_hour, 
-                    minute=end_minute, 
-                    second=0, 
-                    microsecond=0
-                )
-                if end_min > 1440:  # Перехід на наступний день
-                    current_outage_end += timedelta(days=1)
-                    
-            elif current_minutes < start_min:
-                # Майбутнє відключення
-                future_start = now.replace(
-                    hour=start_hour,
-                    minute=start_minute,
-                    second=0,
-                    microsecond=0
-                )
-                if next_outage_start is None or future_start < next_outage_start:
-                    next_outage_start = future_start
-        
-        # Формуємо текст графіку
-        schedule_text = ", ".join([f"{s['start']}-{s['end']}" for s in today_schedule]) if today_schedule else "Немає відключень"
-        
-        if current_outage_end:
-            # Зараз немає світла
-            return {
-                "status": "Немає світла",
-                "next": f"Включать о {current_outage_end.strftime('%H:%M')}",
-                "has_power": False,
-                "icon": "🔴",
-                "schedule": today_schedule,
-                "schedule_text": schedule_text
-            }
-        elif next_outage_start:
-            # Зараз є світло
-            delta = next_outage_start - now
-            hours = int(delta.total_seconds() // 3600)
-            mins = int((delta.total_seconds() % 3600) // 60)
-            
-            if hours > 0:
-                time_str = f"через {hours}г {mins}хв"
-            else:
-                time_str = f"через {mins}хв"
-            
-            return {
-                "status": "Є світло",
-                "next": f"Відключать {time_str}",
-                "has_power": True,
-                "icon": "🟢",
-                "schedule": today_schedule,
-                "schedule_text": schedule_text
-            }
-        else:
-            # Немає відключень на сьогодні
-            return {
-                "status": "Є світло",
-                "next": "Відключень немає",
-                "has_power": True,
-                "icon": "🟢",
-                "schedule": [],
-                "schedule_text": "Графіків відключень немає"
+                "has_power": group_data.get("has_power"),
+                "schedule_text": group_data.get("schedule_text", ""),
+                "group": group_name
             }
             
     except Exception as e:
-        print(f"ERROR parse_yasno_new_api: {e}", file=sys.stderr, flush=True)
-        import traceback
-        traceback.print_exc(file=sys.stderr)
-        return None
-
-def parse_yasno_schedule(data, parser_type="yasno_v1"):
-    """
-    Парсить відповідь від Yasno API та формує компактний статус + графік
-    """
-    now = datetime.now()
-    current_outage_end = None
-    next_outage_start = None
-    today_schedule = []
-    
-    try:
-        if parser_type == "yasno_v1":
-            # Структура Yasno API
-            if not isinstance(data, dict):
-                print(f"DEBUG: Data is not dict: {type(data)}", file=sys.stderr, flush=True)
-                return None
-            
-            components = data.get("components", [])
-            print(f"DEBUG: Found {len(components)} components", file=sys.stderr, flush=True)
-            
-            for component in components:
-                template = component.get("template_name", "")
-                print(f"DEBUG: Component template: {template}", file=sys.stderr, flush=True)
-                
-                if template == "electricity-outages-daily-schedule":
-                    schedule = component.get("schedule", {})
-                    print(f"DEBUG: Schedule groups: {list(schedule.keys())}", file=sys.stderr, flush=True)
-                    
-                    # Шукаємо нашу групу
-                    group_schedule = schedule.get(POWER_GROUP, [])
-                    print(f"DEBUG: Group {POWER_GROUP} has {len(group_schedule)} periods", file=sys.stderr, flush=True)
-                    
-                    if not group_schedule:
-                        # Можливо, група записана інакше, спробуємо всі варіанти
-                        for key in schedule.keys():
-                            if "3" in key and "2" in key:
-                                group_schedule = schedule[key]
-                                print(f"DEBUG: Found alternative group key: {key}", file=sys.stderr, flush=True)
-                                break
-                    
-                    today_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
-                    today_end = now.replace(hour=23, minute=59, second=59, microsecond=999999)
-                    
-                    for period in group_schedule:
-                        try:
-                            start_str = period.get("start")
-                            end_str = period.get("end")
-                            
-                            if not start_str or not end_str:
-                                continue
-                            
-                            # Парсимо час (підтримка різних форматів)
-                            for fmt in ["%Y-%m-%dT%H:%M:%S", "%Y-%m-%dT%H:%M:%SZ", "%Y-%m-%d %H:%M:%S"]:
-                                try:
-                                    start_dt = datetime.strptime(start_str.replace('Z', ''), fmt)
-                                    end_dt = datetime.strptime(end_str.replace('Z', ''), fmt)
-                                    break
-                                except:
-                                    continue
-                            else:
-                                # ISO format
-                                start_dt = datetime.fromisoformat(start_str.replace('Z', ''))
-                                end_dt = datetime.fromisoformat(end_str.replace('Z', ''))
-                            
-                            # Збираємо графік на сьогодні
-                            if today_start <= start_dt <= today_end:
-                                today_schedule.append({
-                                    "start": start_dt.strftime("%H:%M"),
-                                    "end": end_dt.strftime("%H:%M")
-                                })
-                            
-                            # Зараз відключення?
-                            if start_dt <= now <= end_dt:
-                                current_outage_end = end_dt
-                            # Майбутнє відключення?
-                            elif now < start_dt:
-                                if next_outage_start is None or start_dt < next_outage_start:
-                                    next_outage_start = start_dt
-                                    
-                        except Exception as e:
-                            print(f"ERROR parsing period {period}: {e}", file=sys.stderr, flush=True)
-                            continue
-        
-        # Формуємо відповідь
-        schedule_text = ", ".join([f"{s['start']}-{s['end']}" for s in today_schedule]) if today_schedule else "Немає відключень"
-        
-        if current_outage_end:
-            # Зараз немає світла
-            return {
-                "status": "Немає світла",
-                "next": f"Включать о {current_outage_end.strftime('%H:%M')}",
-                "has_power": False,
-                "icon": "🔴",
-                "schedule": today_schedule,
-                "schedule_text": schedule_text
-            }
-        elif next_outage_start:
-            # Зараз є світло
-            delta = next_outage_start - now
-            hours = int(delta.total_seconds() // 3600)
-            mins = int((delta.total_seconds() % 3600) // 60)
-            
-            if hours > 0:
-                time_str = f"через {hours}г {mins}хв"
-            else:
-                time_str = f"через {mins}хв"
-            
-            return {
-                "status": "Є світло",
-                "next": f"Відключать {time_str}",
-                "has_power": True,
-                "icon": "🟢",
-                "schedule": today_schedule,
-                "schedule_text": schedule_text
-            }
-        else:
-            # Немає даних про відключення
-            return {
-                "status": "Є світло",
-                "next": "Графік невідомий",
-                "has_power": True,
-                "icon": "🟢",
-                "schedule": today_schedule,
-                "schedule_text": schedule_text if today_schedule else "Дані відсутні"
-            }
-            
-    except Exception as e:
-        print(f"ERROR parse_yasno_schedule: {e}", file=sys.stderr, flush=True)
-        import traceback
-        traceback.print_exc(file=sys.stderr)
-        return None
-
+        print(f"DEBUG Power Error: {e}")
+    return None
 # ===== Столи =====
 HALL_TABLES = [1,2,3,4,5,6,8]
 TERRACE_TABLES = [7,10,11,12,13]
